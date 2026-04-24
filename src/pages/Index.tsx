@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { TopBar } from "@/components/finance/TopBar";
 import { GuardianStatus } from "@/components/finance/GuardianStatus";
 import { AccountsStrip } from "@/components/finance/AccountsStrip";
@@ -5,8 +6,11 @@ import { InsightFeed } from "@/components/finance/InsightFeed";
 import { RunwayCard } from "@/components/finance/RunwayCard";
 import { BudgetBaseline } from "@/components/finance/BudgetBaseline";
 import { TransactionList } from "@/components/finance/TransactionList";
+import { ConnectAccountDialog } from "@/components/finance/ConnectAccountDialog";
 
 const Index = () => {
+  const [connectOpen, setConnectOpen] = useState(false);
+
   return (
     <div className="min-h-screen">
       <TopBar />
@@ -19,7 +23,7 @@ const Index = () => {
 
         {/* Accounts */}
         <div className="mt-6 animate-fade-in-up [animation-delay:80ms]">
-          <AccountsStrip />
+          <AccountsStrip onConnect={() => setConnectOpen(true)} />
         </div>
 
         {/* Two-column body */}
@@ -50,6 +54,8 @@ const Index = () => {
           </p>
         </footer>
       </main>
+
+      <ConnectAccountDialog open={connectOpen} onOpenChange={setConnectOpen} />
     </div>
   );
 };

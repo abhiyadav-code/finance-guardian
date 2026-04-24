@@ -1,5 +1,7 @@
-import { transactions, fmtCents } from "@/lib/finance-data";
-import { AlertTriangle, Repeat, Copy, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
+import { useFinanceStore } from "@/lib/finance-store";
+import { fmtCents } from "@/lib/finance-data";
+import { AlertTriangle, Repeat, Copy, Sparkles, ArrowRight } from "lucide-react";
 
 const flagMeta = {
   anomaly:              { Icon: AlertTriangle, label: "Anomaly",       cls: "text-destructive bg-destructive/10 ring-destructive/30" },
@@ -8,7 +10,7 @@ const flagMeta = {
 } as const;
 
 export function TransactionList() {
-  const items = transactions.slice(0, 10);
+  const items = useFinanceStore((s) => s.transactions).slice(0, 10);
 
   return (
     <section className="panel p-6 md:p-8">
@@ -17,9 +19,13 @@ export function TransactionList() {
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Recent activity</p>
           <h2 className="font-display mt-1 text-2xl">Auto-classified, instantly.</h2>
         </div>
-        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Sparkles className="h-3 w-3 text-primary" /> 94.6% model accuracy
-        </span>
+        <Link
+          to="/transactions"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-primary"
+        >
+          <Sparkles className="h-3 w-3 text-primary" /> View all & edit categories
+          <ArrowRight className="h-3 w-3" />
+        </Link>
       </header>
 
       <ul className="divide-y divide-border">

@@ -52,6 +52,7 @@ const CashFlow = () => {
   const income = useFinanceStore((s) => s.income);
   const outflows = useFinanceStore((s) => s.outflows);
   const budgets = useFinanceStore((s) => s.budgets);
+  const transactions = useFinanceStore((s) => s.transactions);
   const setBudget = useFinanceStore((s) => s.setBudget);
   const toggleIncome = useFinanceStore((s) => s.toggleIncome);
   const setIncomeAmount = useFinanceStore((s) => s.setIncomeAmount);
@@ -222,6 +223,7 @@ const CashFlow = () => {
           <BudgetProjector
             budgets={budgets}
             setBudget={setBudget}
+            transactions={transactions}
             monthlyIn={monthlyIn}
             essentialOut={outflows.reduce((s, o) => s + o.amount, 0)}
           />

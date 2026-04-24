@@ -16,6 +16,7 @@ export type Transaction = {
   flagged?: "anomaly" | "shadow_subscription" | "duplicate" | null;
   confidence: number; // 0-1 categorization confidence
   essential: boolean;
+  userOverride?: boolean;
 };
 
 export const accounts = [

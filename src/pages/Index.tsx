@@ -54,6 +54,8 @@ const Index = () => {
           </p>
         </footer>
       </main>
+
+      <ConnectAccountDialog open={connectOpen} onOpenChange={setConnectOpen} />
     </div>
   );
 };

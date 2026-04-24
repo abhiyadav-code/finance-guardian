@@ -7,15 +7,19 @@ import {
 import {
   ArrowLeft, ArrowDownRight, ArrowUpRight, Wallet, Briefcase, Banknote,
   Repeat, CreditCard, Home, Zap, Car, Sparkles, AlertTriangle,
+  Wand2, Check, Loader2, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
-import { fmt } from "@/lib/finance-data";
+import { fmt, type Transaction, type Category } from "@/lib/finance-data";
 import { buildProjection, type IncomeStream, type OutflowStream } from "@/lib/cashflow-data";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const HORIZONS: { label: string; days: number }[] = [
   { label: "30d", days: 30 },
@@ -48,6 +52,7 @@ const CashFlow = () => {
   const income = useFinanceStore((s) => s.income);
   const outflows = useFinanceStore((s) => s.outflows);
   const budgets = useFinanceStore((s) => s.budgets);
+  const transactions = useFinanceStore((s) => s.transactions);
   const setBudget = useFinanceStore((s) => s.setBudget);
   const toggleIncome = useFinanceStore((s) => s.toggleIncome);
   const setIncomeAmount = useFinanceStore((s) => s.setIncomeAmount);
@@ -218,6 +223,7 @@ const CashFlow = () => {
           <BudgetProjector
             budgets={budgets}
             setBudget={setBudget}
+            transactions={transactions}
             monthlyIn={monthlyIn}
             essentialOut={outflows.reduce((s, o) => s + o.amount, 0)}
           />
@@ -381,17 +387,144 @@ function OutflowCard({ outflows }: { outflows: OutflowStream[] }) {
   );
 }
 
+type Suggestion = {
+  category: string;
+  suggested: number;
+  rationale: string;
+  confidence: number;
+};
+
+type SuggestionGoal = "balanced" | "aggressive_save" | "comfort";
+
+const GOAL_LABELS: Record<SuggestionGoal, string> = {
+  balanced: "Balanced",
+  aggressive_save: "Save aggressively",
+  comfort: "Comfort first",
+};
+
+/** Aggregate the user's discretionary spend per category over the recent window. */
+function buildCategoryStats(
+  transactions: Transaction[],
+  budgets: Record<Category, number>
+) {
+  const now = Date.now();
+  const ms90 = 90 * 24 * 60 * 60 * 1000;
+  const ms30 = 30 * 24 * 60 * 60 * 1000;
+
+  const byCat = new Map<
+    string,
+    { recent: number[]; older: number[]; merchants: Set<string> }
+  >();
+
+  for (const t of transactions) {
+    if (t.amount >= 0) continue; // skip income/transfers in
+    if (t.category === "Income" || t.category === "Transfer") continue;
+    if (!(t.category in budgets)) continue;
+    const age = now - new Date(t.date).getTime();
+    if (age > ms90) continue;
+    const bucket = byCat.get(t.category) ?? { recent: [], older: [], merchants: new Set() };
+    const spend = Math.abs(t.amount);
+    if (age <= ms30) bucket.recent.push(spend);
+    else bucket.older.push(spend);
+    bucket.merchants.add(t.merchant);
+    byCat.set(t.category, bucket);
+  }
+
+  return Object.keys(budgets).map((category) => {
+    const b = byCat.get(category) ?? { recent: [], older: [], merchants: new Set<string>() };
+    const all = [...b.recent, ...b.older];
+    const monthlyAverage = all.length ? (all.reduce((s, n) => s + n, 0) / 90) * 30 : 0;
+
+    // Simple median of monthly buckets: sum recent vs sum older (each ~30d window when older has data)
+    const recentSum = b.recent.reduce((s, n) => s + n, 0);
+    const olderSum = b.older.reduce((s, n) => s + n, 0) / 2; // ~60d normalized to 30
+    const candidates = [recentSum, olderSum].filter((n) => n > 0).sort((a, b) => a - b);
+    const monthlyMedian = candidates.length ? candidates[Math.floor(candidates.length / 2)] : monthlyAverage;
+
+    let trend: "up" | "down" | "flat" = "flat";
+    if (recentSum > olderSum * 1.15) trend = "up";
+    else if (recentSum < olderSum * 0.85 && olderSum > 0) trend = "down";
+
+    return {
+      category,
+      monthlyAverage: Math.round(monthlyAverage),
+      monthlyMedian: Math.round(monthlyMedian),
+      trend,
+      currentBudget: budgets[category as Category] ?? 0,
+      recentMerchants: Array.from(b.merchants).slice(0, 5),
+    };
+  }).filter((s) => s.monthlyAverage > 0 || s.currentBudget > 0);
+}
+
 function BudgetProjector({
-  budgets, setBudget, monthlyIn, essentialOut,
+  budgets, setBudget, transactions, monthlyIn, essentialOut,
 }: {
-  budgets: Record<string, number>;
-  setBudget: (cat: any, amount: number) => void;
+  budgets: Record<Category, number>;
+  setBudget: (cat: Category, amount: number) => void;
+  transactions: Transaction[];
   monthlyIn: number;
   essentialOut: number;
 }) {
   const totalDiscretionary = Object.values(budgets).reduce((s, n) => s + n, 0);
   const projectedNet = monthlyIn - essentialOut - totalDiscretionary;
   const netTone = projectedNet >= 0 ? "text-success" : "text-destructive";
+
+  const [goal, setGoal] = useState<SuggestionGoal>("balanced");
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
+  const [summary, setSummary] = useState<string>("");
+
+  const stats = useMemo(
+    () => buildCategoryStats(transactions, budgets),
+    [transactions, budgets]
+  );
+
+  async function requestSuggestions(targetGoal: SuggestionGoal) {
+    setLoading(true);
+    setGoal(targetGoal);
+    try {
+      const { data, error } = await supabase.functions.invoke("suggest-budgets", {
+        body: {
+          monthlyIncome: Math.round(monthlyIn),
+          monthlyEssentialBills: Math.round(essentialOut),
+          goal: targetGoal,
+          categories: stats,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setSuggestions(data.suggestions ?? []);
+      setSummary(data.summary ?? "");
+      toast.success("Budget suggestions ready");
+    } catch (e: any) {
+      console.error(e);
+      const msg = e?.message ?? "Couldn't generate suggestions";
+      if (msg.includes("Rate limit")) toast.error("Slow down — rate limit hit. Try again in a moment.");
+      else if (msg.includes("credits")) toast.error("AI credits exhausted. Add funds to your Lovable workspace.");
+      else toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function applyAll() {
+    if (!suggestions) return;
+    for (const s of suggestions) {
+      if (s.category in budgets) setBudget(s.category as Category, s.suggested);
+    }
+    toast.success(`Applied ${suggestions.length} budgets`);
+  }
+
+  function applyOne(s: Suggestion) {
+    setBudget(s.category as Category, s.suggested);
+    toast.success(`${s.category} set to ${fmt(s.suggested)}/mo`);
+  }
+
+  const suggestionMap = useMemo(() => {
+    const m = new Map<string, Suggestion>();
+    suggestions?.forEach((s) => m.set(s.category, s));
+    return m;
+  }, [suggestions]);
 
   return (
     <section className="panel p-6 md:p-8">
@@ -400,7 +533,7 @@ function BudgetProjector({
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Forward-looking budget</p>
           <h2 className="font-display mt-1 text-2xl">What if I spent…</h2>
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-            Drag a slider to set a monthly ceiling per category. The chart above re-projects your cash on hand instantly.
+            Drag a slider to set a monthly ceiling per category, or let AI suggest one based on your last 90 days.
           </p>
         </div>
         <div className="rounded-xl border border-border bg-background/50 px-4 py-3 text-right">
@@ -410,13 +543,64 @@ function BudgetProjector({
         </div>
       </header>
 
+      {/* AI suggestion bar */}
+      <div className="mt-6 rounded-2xl border border-primary/20 bg-primary/[0.04] p-4 md:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/15 ring-1 ring-primary/30">
+              <Wand2 className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">AI budget assistant</p>
+              <p className="text-[11px] text-muted-foreground">
+                Reads your last 90 days of transactions and proposes a realistic monthly ceiling per category.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {(Object.keys(GOAL_LABELS) as SuggestionGoal[]).map((g) => (
+              <button
+                key={g}
+                onClick={() => requestSuggestions(g)}
+                disabled={loading}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  goal === g && suggestions
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {loading && goal === g ? (
+                  <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" /> Thinking</span>
+                ) : (
+                  GOAL_LABELS[g]
+                )}
+              </button>
+            ))}
+            {suggestions && (
+              <Button size="sm" onClick={applyAll} className="h-8 gap-1.5">
+                <Check className="h-3.5 w-3.5" /> Apply all
+              </Button>
+            )}
+          </div>
+        </div>
+        {summary && (
+          <p className="mt-3 border-t border-primary/15 pt-3 text-xs text-foreground/80">{summary}</p>
+        )}
+      </div>
+
       <ul className="mt-7 grid gap-x-10 gap-y-6 md:grid-cols-2">
         {Object.entries(budgets).map(([category, amount]) => (
           <BudgetSlider
             key={category}
             category={category}
             amount={amount}
-            onChange={(n) => setBudget(category as any, n)}
+            stat={stats.find((s) => s.category === category)}
+            suggestion={suggestionMap.get(category)}
+            onChange={(n) => setBudget(category as Category, n)}
+            onApplySuggestion={() => {
+              const s = suggestionMap.get(category);
+              if (s) applyOne(s);
+            }}
           />
         ))}
       </ul>
@@ -425,27 +609,89 @@ function BudgetProjector({
 }
 
 function BudgetSlider({
-  category, amount, onChange,
-}: { category: string; amount: number; onChange: (n: number) => void }) {
-  const max = Math.max(2000, Math.ceil((amount * 1.6) / 100) * 100);
+  category, amount, stat, suggestion, onChange, onApplySuggestion,
+}: {
+  category: string;
+  amount: number;
+  stat?: ReturnType<typeof buildCategoryStats>[number];
+  suggestion?: Suggestion;
+  onChange: (n: number) => void;
+  onApplySuggestion: () => void;
+}) {
+  const max = Math.max(2000, Math.ceil((Math.max(amount, suggestion?.suggested ?? 0) * 1.6) / 100) * 100);
+  const matchesSuggestion = suggestion && Math.abs(amount - suggestion.suggested) < 1;
+  const TrendIcon = stat?.trend === "up" ? TrendingUp : stat?.trend === "down" ? TrendingDown : Minus;
+  const trendTone =
+    stat?.trend === "up" ? "text-destructive" :
+    stat?.trend === "down" ? "text-success" : "text-muted-foreground";
+
+  // Position of the AI suggestion marker on the slider track (0-100%)
+  const markerPct = suggestion ? Math.min(100, (suggestion.suggested / max) * 100) : null;
+
   return (
     <li>
-      <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-sm font-medium">{category}</span>
-        <span className="font-mono-fin text-sm tabular-nums text-foreground">{fmt(amount)}<span className="ml-1 text-[10px] text-muted-foreground">/mo</span></span>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{category}</span>
+          {stat && (
+            <span className={`inline-flex items-center gap-0.5 text-[10px] ${trendTone}`}>
+              <TrendIcon className="h-2.5 w-2.5" />
+              {fmt(stat.monthlyMedian)} median
+            </span>
+          )}
+        </div>
+        <span className="font-mono-fin text-sm tabular-nums text-foreground">
+          {fmt(amount)}<span className="ml-1 text-[10px] text-muted-foreground">/mo</span>
+        </span>
       </div>
-      <Slider
-        value={[amount]}
-        onValueChange={(v) => onChange(v[0])}
-        min={0}
-        max={max}
-        step={25}
-        className="cursor-pointer"
-      />
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+
+      <div className="relative">
+        <Slider
+          value={[amount]}
+          onValueChange={(v) => onChange(v[0])}
+          min={0}
+          max={max}
+          step={25}
+          className="cursor-pointer"
+        />
+        {markerPct !== null && (
+          <div
+            className="pointer-events-none absolute -top-1 h-4 w-px bg-primary"
+            style={{ left: `${markerPct}%` }}
+            aria-hidden
+          />
+        )}
+      </div>
+
+      <div className="mt-1 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
         <span>$0</span>
-        <span>{fmt(max)}</span>
+        {suggestion ? (
+          <button
+            onClick={onApplySuggestion}
+            disabled={matchesSuggestion}
+            className={`group inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition-colors ${
+              matchesSuggestion
+                ? "border border-success/40 bg-success/10 text-success"
+                : "border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"
+            }`}
+            title={suggestion.rationale}
+          >
+            {matchesSuggestion ? (
+              <><Check className="h-2.5 w-2.5" /> AI: {fmt(suggestion.suggested)}</>
+            ) : (
+              <><Wand2 className="h-2.5 w-2.5" /> AI suggests {fmt(suggestion.suggested)}</>
+            )}
+          </button>
+        ) : (
+          <span>{fmt(max)}</span>
+        )}
       </div>
+
+      {suggestion && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          <span className="text-foreground/70">{suggestion.rationale}</span>
+        </p>
+      )}
     </li>
   );
 }

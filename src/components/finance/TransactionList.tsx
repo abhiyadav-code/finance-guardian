@@ -1,5 +1,7 @@
-import { transactions, fmtCents } from "@/lib/finance-data";
-import { AlertTriangle, Repeat, Copy, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
+import { useFinanceStore } from "@/lib/finance-store";
+import { fmtCents } from "@/lib/finance-data";
+import { AlertTriangle, Repeat, Copy, Sparkles, ArrowRight } from "lucide-react";
 
 const flagMeta = {
   anomaly:              { Icon: AlertTriangle, label: "Anomaly",       cls: "text-destructive bg-destructive/10 ring-destructive/30" },

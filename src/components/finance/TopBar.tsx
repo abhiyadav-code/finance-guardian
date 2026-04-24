@@ -1,4 +1,5 @@
 import { Shield } from "lucide-react";
+import { NavLink } from "@/components/NavLink";
 
 export function TopBar() {
   return (
@@ -15,9 +16,9 @@ export function TopBar() {
         </div>
 
         <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
-          <a className="text-foreground" href="#">Dashboard</a>
-          <a className="hover:text-foreground" href="#">Insights</a>
-          <a className="hover:text-foreground" href="#">Accounts</a>
+          <NavLink to="/" end className="hover:text-foreground" activeClassName="text-foreground">Dashboard</NavLink>
+          <NavLink to="/cash-flow" className="hover:text-foreground" activeClassName="text-foreground">Cash flow</NavLink>
+          <NavLink to="/transactions" className="hover:text-foreground" activeClassName="text-foreground">Transactions</NavLink>
           <a className="hover:text-foreground" href="#">Settings</a>
         </nav>
 

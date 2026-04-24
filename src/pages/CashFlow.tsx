@@ -7,15 +7,19 @@ import {
 import {
   ArrowLeft, ArrowDownRight, ArrowUpRight, Wallet, Briefcase, Banknote,
   Repeat, CreditCard, Home, Zap, Car, Sparkles, AlertTriangle,
+  Wand2, Check, Loader2, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
-import { fmt } from "@/lib/finance-data";
+import { fmt, type Transaction, type Category } from "@/lib/finance-data";
 import { buildProjection, type IncomeStream, type OutflowStream } from "@/lib/cashflow-data";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const HORIZONS: { label: string; days: number }[] = [
   { label: "30d", days: 30 },

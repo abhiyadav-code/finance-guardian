@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { runway, fmt } from "@/lib/finance-data";
 import { Switch } from "@/components/ui/switch";
 
@@ -66,6 +68,13 @@ export function RunwayCard() {
           ? "Non-essential categories paused. You'd survive on essentials only."
           : "Toggle layoff mode to see what trimming non-essentials buys you."}
       </p>
+
+      <Link
+        to="/cash-flow"
+        className="mt-4 inline-flex items-center gap-1.5 text-xs text-primary transition-colors hover:text-primary-glow"
+      >
+        Project cash on hand month-by-month <ArrowRight className="h-3 w-3" />
+      </Link>
     </section>
   );
 }

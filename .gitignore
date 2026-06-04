@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Local SQLite database (do not commit personal financial data)
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Server secrets (Plaid keys, encryption key) — keep the example tracked
+server/.env*
+!server/.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,21 +1,34 @@
-import { categoryBudgets, fmt } from "@/lib/finance-data";
+import { useMemo } from "react";
+import { fmt } from "@/lib/finance-data";
+import { useFinanceStore } from "@/lib/finance-store";
+import { deriveBudgetRows } from "@/lib/derive";
+
+const MONTH = new Date().toLocaleDateString("en-US", { month: "long" });
 
 export function BudgetBaseline() {
-  const sorted = [...categoryBudgets].sort((a, b) => b.spent / b.baseline - a.spent / a.baseline);
+  const transactions = useFinanceStore((s) => s.transactions);
+  const budgets = useFinanceStore((s) => s.budgets);
+  const sorted = useMemo(() => deriveBudgetRows(transactions, budgets), [transactions, budgets]);
 
   return (
     <section className="panel p-6 md:p-8">
       <header className="mb-6 flex items-end justify-between">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Auto budget · April</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Auto budget · {MONTH}</p>
           <h2 className="font-display mt-1 text-2xl">Baseline, no spreadsheet.</h2>
         </div>
-        <span className="text-xs text-muted-foreground">Inferred from 90-day median</span>
+        <span className="text-xs text-muted-foreground">Spend vs ceiling</span>
       </header>
+
+      {sorted.length === 0 && (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          No budgets yet — they'll appear as spending data comes in.
+        </p>
+      )}
 
       <ul className="space-y-4">
         {sorted.map((b) => {
-          const pct = Math.min(140, (b.spent / b.baseline) * 100);
+          const pct = Math.min(140, (b.spent / (b.baseline || 1)) * 100);
           const over = b.spent > b.baseline;
           const barColor = over
             ? "bg-destructive"

@@ -2,7 +2,7 @@
 // drive a daily projection of cash on hand.
 import type { Category } from "./finance-data";
 
-export type Cadence = "weekly" | "biweekly" | "monthly" | "quarterly";
+export type Cadence = "weekly" | "biweekly" | "semimonthly" | "monthly" | "quarterly" | "annually";
 
 export type IncomeStream = {
   id: string;
@@ -62,7 +62,7 @@ export const seedBudgets: { category: Category; baseline: number }[] = [
 // ----- Projection helpers -----
 
 const cadenceDays: Record<Cadence, number> = {
-  weekly: 7, biweekly: 14, monthly: 30, quarterly: 91,
+  weekly: 7, biweekly: 14, semimonthly: 15, monthly: 30, quarterly: 91, annually: 365,
 };
 
 /** Generate all occurrences of a stream within [from, to]. */

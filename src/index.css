@@ -6,8 +6,67 @@
    All colors HSL. Single warm amber accent = the guardian signal. */
 
 @layer base {
+  /* LIGHT theme (default for daytime readability) — warm paper, ink text. */
   :root {
-    /* Deep ink canvas */
+    --background: 40 36% 97%;
+    --foreground: 28 16% 13%;
+
+    --card: 40 40% 99%;
+    --card-foreground: 28 16% 13%;
+
+    --popover: 40 40% 99%;
+    --popover-foreground: 28 16% 13%;
+
+    /* Amber guardian — deepened for contrast on light surfaces */
+    --primary: 28 92% 44%;
+    --primary-foreground: 40 40% 98%;
+    --primary-glow: 32 95% 56%;
+
+    --secondary: 38 26% 91%;
+    --secondary-foreground: 28 16% 22%;
+
+    --muted: 38 24% 92%;
+    --muted-foreground: 30 8% 38%;
+
+    --accent: 38 28% 88%;
+    --accent-foreground: 28 16% 13%;
+
+    --destructive: 4 74% 47%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 46% 34%;
+    --success-foreground: 0 0% 100%;
+    --warning: 28 92% 44%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 36 18% 85%;
+    --input: 36 18% 85%;
+    --ring: 28 92% 44%;
+
+    --radius: 1rem;
+
+    --gradient-guardian: radial-gradient(circle at 30% 20%, hsl(36 96% 58% / 0.10), transparent 60%),
+                         radial-gradient(circle at 80% 80%, hsl(20 80% 50% / 0.06), transparent 55%);
+    --gradient-amber: linear-gradient(135deg, hsl(36 92% 52%), hsl(28 100% 46%));
+    --gradient-card: linear-gradient(180deg, hsl(40 40% 99.5%), hsl(40 30% 96%));
+    --gradient-runway: linear-gradient(90deg, hsl(152 46% 38%), hsl(36 92% 48%) 60%, hsl(4 74% 50%));
+
+    --shadow-glow: 0 0 60px -24px hsl(36 96% 58% / 0.35);
+    --shadow-soft: 0 1px 0 0 hsl(0 0% 100% / 0.7) inset, 0 16px 36px -28px hsl(28 30% 20% / 0.22);
+
+    --transition-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+
+    --sidebar-background: 40 36% 96%;
+    --sidebar-foreground: 28 14% 25%;
+    --sidebar-primary: 28 92% 44%;
+    --sidebar-primary-foreground: 40 40% 98%;
+    --sidebar-accent: 38 24% 90%;
+    --sidebar-accent-foreground: 28 16% 13%;
+    --sidebar-border: 36 18% 86%;
+    --sidebar-ring: 28 92% 44%;
+  }
+
+  /* DARK theme — the original editorial "deep ink" look. */
+  .dark {
     --background: 30 12% 7%;
     --foreground: 36 24% 92%;
 
@@ -17,7 +76,6 @@
     --popover: 30 12% 9%;
     --popover-foreground: 36 24% 92%;
 
-    /* Amber guardian — the only "loud" color in the system */
     --primary: 36 96% 58%;
     --primary-foreground: 30 30% 8%;
     --primary-glow: 38 100% 70%;
@@ -31,7 +89,6 @@
     --accent: 30 8% 16%;
     --accent-foreground: 36 24% 92%;
 
-    /* Status semantics */
     --destructive: 4 78% 58%;
     --destructive-foreground: 36 30% 96%;
     --success: 152 48% 52%;
@@ -43,9 +100,6 @@
     --input: 30 8% 18%;
     --ring: 36 96% 58%;
 
-    --radius: 1rem;
-
-    /* Editorial gradients & shadows */
     --gradient-guardian: radial-gradient(circle at 30% 20%, hsl(36 96% 58% / 0.18), transparent 60%),
                          radial-gradient(circle at 80% 80%, hsl(20 80% 50% / 0.12), transparent 55%);
     --gradient-amber: linear-gradient(135deg, hsl(36 96% 58%), hsl(30 100% 50%));
@@ -55,9 +109,6 @@
     --shadow-glow: 0 0 80px -20px hsl(36 96% 58% / 0.45);
     --shadow-soft: 0 1px 0 0 hsl(36 24% 92% / 0.04) inset, 0 20px 40px -24px hsl(0 0% 0% / 0.6);
 
-    --transition-smooth: cubic-bezier(0.22, 1, 0.36, 1);
-
-    /* Sidebar (kept dark to match) */
     --sidebar-background: 30 12% 6%;
     --sidebar-foreground: 36 18% 80%;
     --sidebar-primary: 36 96% 58%;
@@ -82,9 +133,15 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "ss01", "cv11", "cv02";
     background-image:
+      radial-gradient(1200px 600px at 90% -10%, hsl(36 96% 58% / 0.05), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, hsl(20 80% 55% / 0.05), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  .dark body {
+    background-image:
       radial-gradient(1200px 600px at 90% -10%, hsl(36 96% 58% / 0.06), transparent 60%),
       radial-gradient(900px 500px at -10% 110%, hsl(20 70% 40% / 0.08), transparent 60%);
-    background-attachment: fixed;
   }
 
   ::selection {

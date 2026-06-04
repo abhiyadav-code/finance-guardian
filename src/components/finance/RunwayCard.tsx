@@ -1,17 +1,22 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
-import { runway, fmt } from "@/lib/finance-data";
+import { fmt } from "@/lib/finance-data";
+import { useFinanceStore } from "@/lib/finance-store";
+import { deriveSummary } from "@/lib/derive";
 import { Switch } from "@/components/ui/switch";
 
 export function RunwayCard() {
   const [layoffMode, setLayoffMode] = useState(false);
+  const accounts = useFinanceStore((s) => s.accounts);
+  const transactions = useFinanceStore((s) => s.transactions);
+  const runway = useMemo(() => deriveSummary(accounts, transactions), [accounts, transactions]);
 
   const monthly = useMemo(
     () => runway.monthlyEssential + (layoffMode ? 0 : runway.monthlyLifestyle),
-    [layoffMode]
+    [layoffMode, runway]
   );
-  const months = runway.liquidAssets / monthly;
+  const months = monthly > 0 ? runway.liquidAssets / monthly : 0;
   const pct = Math.min(100, (months / 18) * 100); // 18 mo full bar
 
   const tone =

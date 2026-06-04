@@ -18,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
 import { fmt, type Transaction, type Category } from "@/lib/finance-data";
 import { buildProjection, type IncomeStream, type OutflowStream, type Cadence } from "@/lib/cashflow-data";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 const HORIZONS: { label: string; days: number }[] = [
@@ -480,31 +479,16 @@ function BudgetProjector({
   );
 
   async function requestSuggestions(targetGoal: SuggestionGoal) {
-    setLoading(true);
+    // AI budget suggestions are moving to the Claude API (see roadmap). The old
+    // cloud function has been removed; show a placeholder until that lands.
     setGoal(targetGoal);
-    try {
-      const { data, error } = await supabase.functions.invoke("suggest-budgets", {
-        body: {
-          monthlyIncome: Math.round(monthlyIn),
-          monthlyEssentialBills: Math.round(essentialOut),
-          goal: targetGoal,
-          categories: stats,
-        },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-      setSuggestions(data.suggestions ?? []);
-      setSummary(data.summary ?? "");
-      toast.success("Budget suggestions ready");
-    } catch (e: any) {
-      console.error(e);
-      const msg = e?.message ?? "Couldn't generate suggestions";
-      if (msg.includes("Rate limit")) toast.error("Slow down — rate limit hit. Try again in a moment.");
-      else if (msg.includes("credits")) toast.error("AI credits exhausted. Add funds to your Lovable workspace.");
-      else toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
+    setLoading(false);
+    setSuggestions(null);
+    setSummary("");
+    void stats; // (will feed the Claude prompt)
+    toast.info("AI budget suggestions are coming soon", {
+      description: "This will run on the Claude API in an upcoming update.",
+    });
   }
 
   function applyAll() {

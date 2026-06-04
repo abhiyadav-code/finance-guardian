@@ -18,6 +18,10 @@ server/data/
 *.db-wal
 *.db-shm
 
+# Env files — never commit real values (frontend no longer uses a root .env)
+/.env
+/.env.local
+
 # Server secrets (Plaid keys, encryption key) — keep the example tracked
 server/.env*
 !server/.env.example

@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
 import { fmt, type Transaction, type Category } from "@/lib/finance-data";
-import { buildProjection, type IncomeStream, type OutflowStream } from "@/lib/cashflow-data";
+import { buildProjection, type IncomeStream, type OutflowStream, type Cadence } from "@/lib/cashflow-data";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -28,7 +28,7 @@ const HORIZONS: { label: string; days: number }[] = [
   { label: "6mo", days: 182 },
 ];
 
-const cadenceLabel = { weekly: "/wk", biweekly: "/2wk", monthly: "/mo", quarterly: "/qtr" } as const;
+const cadenceLabel = { weekly: "/wk", biweekly: "/2wk", semimonthly: "/2×mo", monthly: "/mo", quarterly: "/qtr", annually: "/yr" } as const;
 
 const incomeKindIcon = {
   paycheck:     Briefcase,
@@ -696,12 +696,14 @@ function BudgetSlider({
   );
 }
 
-function monthlyEquivalent(amount: number, cadence: "weekly" | "biweekly" | "monthly" | "quarterly") {
+function monthlyEquivalent(amount: number, cadence: Cadence) {
   switch (cadence) {
-    case "weekly":    return amount * 4.33;
-    case "biweekly":  return amount * 2.17;
-    case "monthly":   return amount;
-    case "quarterly": return amount / 3;
+    case "weekly":      return amount * 4.33;
+    case "biweekly":    return amount * 2.17;
+    case "semimonthly": return amount * 2;
+    case "monthly":     return amount;
+    case "quarterly":   return amount / 3;
+    case "annually":    return amount / 12;
   }
 }
 

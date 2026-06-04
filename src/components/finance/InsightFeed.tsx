@@ -1,5 +1,7 @@
-import { AlertTriangle, Eye, Info, ChevronRight } from "lucide-react";
-import { insights } from "@/lib/finance-data";
+import { AlertTriangle, Eye, Info, ChevronRight, ShieldCheck } from "lucide-react";
+import { useMemo } from "react";
+import { useFinanceStore } from "@/lib/finance-store";
+import { deriveInsights } from "@/lib/derive";
 
 const styles = {
   alert: { ring: "ring-destructive/40", bg: "bg-destructive/10",  fg: "text-destructive", Icon: AlertTriangle, label: "Alert" },
@@ -8,6 +10,9 @@ const styles = {
 } as const;
 
 export function InsightFeed() {
+  const transactions = useFinanceStore((s) => s.transactions);
+  const insights = useMemo(() => deriveInsights(transactions), [transactions]);
+
   return (
     <section className="panel p-6 md:p-8">
       <header className="mb-6 flex items-end justify-between">
@@ -15,8 +20,15 @@ export function InsightFeed() {
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Low-noise alerts</p>
           <h2 className="font-display mt-1 text-2xl">This week's signals</h2>
         </div>
-        <span className="font-mono-fin text-xs text-muted-foreground">4 / month avg</span>
+        <span className="font-mono-fin text-xs text-muted-foreground">{insights.length} flagged</span>
       </header>
+
+      {insights.length === 0 && (
+        <div className="flex flex-col items-center gap-2 py-10 text-center">
+          <ShieldCheck className="h-8 w-8 text-success" />
+          <p className="text-sm text-muted-foreground">All quiet — nothing needs your attention.</p>
+        </div>
+      )}
 
       <ul className="divide-y divide-border">
         {insights.map((it) => {

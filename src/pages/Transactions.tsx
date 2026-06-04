@@ -9,7 +9,7 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
-import { useFinanceStore, ALL_CATEGORIES } from "@/lib/finance-store";
+import { useFinanceStore } from "@/lib/finance-store";
 import { fmtCents } from "@/lib/finance-data";
 import {
   ArrowLeft, Search, Sparkles, Pencil, Check, AlertTriangle, Repeat, Copy, Plus,
@@ -27,6 +27,7 @@ const Transactions = () => {
   const transactions = useFinanceStore((s) => s.transactions);
   const accounts = useFinanceStore((s) => s.accounts);
   const recategorize = useFinanceStore((s) => s.recategorize);
+  const categories = useFinanceStore((s) => s.categories);
 
   const [query, setQuery] = useState("");
   const [accountFilter, setAccountFilter] = useState<string>("all");
@@ -106,7 +107,7 @@ const Transactions = () => {
             <SelectTrigger className="md:w-48"><SelectValue placeholder="Category" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All categories</SelectItem>
-              {ALL_CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <SelectItem key={c} value={c}>{c}</SelectItem>
               ))}
             </SelectContent>
@@ -195,13 +196,32 @@ function CategoryTag({
   category: string;
   confidence: number;
   userOverride?: boolean;
-  onChange: (next: any) => void;
+  onChange: (next: string) => void;
 }) {
+  const categories = useFinanceStore((s) => s.categories);
+  const addCategory = useFinanceStore((s) => s.addCategory);
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const lowConf = !userOverride && confidence < 0.85;
 
+  const trimmed = query.trim();
+  const filtered = trimmed
+    ? categories.filter((c) => c.toLowerCase().includes(trimmed.toLowerCase()))
+    : categories;
+  const exactExists = categories.some((c) => c.toLowerCase() === trimmed.toLowerCase());
+
+  const choose = (c: string) => {
+    onChange(c);
+    setOpen(false);
+    setQuery("");
+  };
+  const createAndChoose = () => {
+    if (!trimmed) return;
+    choose(addCategory(trimmed));
+  };
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setQuery(""); }}>
       <PopoverTrigger asChild>
         <button
           className={`group inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors
@@ -219,15 +239,24 @@ function CategoryTag({
           <Pencil className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-60" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-56 p-1">
-        <p className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          Recategorize as
-        </p>
-        <ul className="max-h-64 overflow-y-auto">
-          {ALL_CATEGORIES.map((c) => (
+      <PopoverContent align="start" className="w-60 p-1">
+        <div className="p-1">
+          <Input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && trimmed && !exactExists) { e.preventDefault(); createAndChoose(); }
+            }}
+            placeholder="Search or add category…"
+            className="h-8 text-sm"
+          />
+        </div>
+        <ul className="max-h-56 overflow-y-auto">
+          {filtered.map((c) => (
             <li key={c}>
               <button
-                onClick={() => { onChange(c); setOpen(false); }}
+                onClick={() => choose(c)}
                 className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-secondary
                   ${c === category ? "text-primary" : ""}`}
               >
@@ -237,6 +266,15 @@ function CategoryTag({
             </li>
           ))}
         </ul>
+        {trimmed && !exactExists && (
+          <button
+            onClick={createAndChoose}
+            className="mt-0.5 flex w-full items-center gap-2 rounded-md border-t border-border px-2 py-2 text-sm text-primary transition-colors hover:bg-secondary"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Create &ldquo;{trimmed}&rdquo;
+          </button>
+        )}
       </PopoverContent>
     </Popover>
   );

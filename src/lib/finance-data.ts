@@ -1,10 +1,15 @@
 // Mock data for the Finance Guardian prototype.
 // All values are deterministic so the dashboard feels real.
 
-export type Category =
-  | "Groceries" | "Dining" | "Transport" | "Housing" | "Utilities"
-  | "Subscriptions" | "Entertainment" | "Shopping" | "Health" | "Childcare"
-  | "Travel" | "Income" | "Transfer";
+// Categories are user-extensible, so the type is just a string. The built-in
+// taxonomy below seeds the backend and acts as a fallback before hydration.
+export type Category = string;
+
+export const DEFAULT_CATEGORIES = [
+  "Groceries", "Dining", "Transport", "Housing", "Utilities",
+  "Subscriptions", "Entertainment", "Shopping", "Health", "Childcare",
+  "Travel", "Income", "Transfer",
+] as const;
 
 export type Transaction = {
   id: string;

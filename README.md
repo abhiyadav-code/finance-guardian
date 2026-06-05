@@ -6,6 +6,10 @@ Finance Guardian is a personal finance app for **time-poor, high-earning profess
 
 This repository is a **working, self-hosted implementation** of the Finance Guardian product spec — productionized to run **locally on your own machine, for a single user, with your financial data never leaving your computer.**
 
+![Finance Guardian dashboard](assets/screenshots/dashboard.png)
+
+<sub>_The dashboard — Guardian status, net worth, layoff runway, and low-noise alerts. Shown with the built-in demo data._</sub>
+
 ---
 
 ## Table of contents
@@ -69,11 +73,16 @@ Finance Guardian fills that gap with three core jobs:
 
 ## The three screens
 
-- **Dashboard** — Guardian status, net worth, runway, this-week's signals, accounts, and an auto budget baseline. All figures derive from live data.
+- **Dashboard** — Guardian status, net worth, runway, this-week's signals, accounts, and an auto budget baseline. All figures derive from live data. _(See the screenshot at the top.)_
 - **Cash flow** — recurring income streams, scheduled bills, a forward-looking cash-on-hand projection, and a "what if I spent…" budget explorer.
+
+  ![Cash flow](assets/screenshots/cash-flow.png)
+
 - **Transactions** — every transaction, AI-categorized, searchable and filterable, with one-tap recategorization (including custom categories).
 
-> Tip: run the **demo instance** (sample data, no bank needed — see below) for a fully populated walkthrough.
+  ![Transactions](assets/screenshots/transactions.png)
+
+> Tip: run the **demo instance** (sample data, no bank needed — see below) for a fully populated walkthrough. _All screenshots above use that demo data — no real financial information._
 
 ## How it works
 

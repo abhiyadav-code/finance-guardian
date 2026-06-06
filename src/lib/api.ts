@@ -1,8 +1,27 @@
 // Thin REST client for the local Finance Guardian backend.
 // In dev, requests to /api are proxied to the Node server by Vite (see vite.config.ts).
 // In production (single process), they're same-origin.
-import type { Transaction, Category } from "./finance-data";
+//
+// STATIC DEMO MODE: when built with VITE_STATIC_DEMO=1 (the public GitHub Pages
+// demo), there is no backend at all. Every call resolves locally against the
+// bundled sample data so the whole app runs as a self-contained static site —
+// perfect for sharing an interactive, mobile-friendly prototype with stakeholders.
+import {
+  transactions as demoTransactions,
+  accounts as demoAccounts,
+  DEFAULT_CATEGORIES,
+  type Transaction,
+  type Category,
+} from "./finance-data";
+import {
+  seedIncome as demoIncome,
+  seedOutflows as demoOutflows,
+  seedBudgets as demoBudgets,
+} from "./cashflow-data";
 import type { Account } from "./finance-store";
+
+/** True when this build is the standalone, backend-less public demo. */
+export const STATIC_DEMO = import.meta.env.VITE_STATIC_DEMO === "1";
 
 // BASE_URL is the Vite `base` (e.g. "/finance-guardian/"), so the API lives at
 // "/finance-guardian/api" and the whole app can move under any path in one place.
@@ -30,27 +49,76 @@ export type AppState = {
   categories: Category[];
 };
 
-export const api = {
+export type Api = {
+  getState: () => Promise<AppState>;
+  recategorize: (id: string, category: Category) => Promise<unknown>;
+  addInstitution: (institutionName: string, accounts: Account[], transactions: Transaction[]) => Promise<unknown>;
+  setBudget: (category: Category, amount: number) => Promise<unknown>;
+  addCategory: (name: string) => Promise<unknown>;
+  toggleIncome: (id: string) => Promise<unknown>;
+  setIncomeAmount: (id: string, amount: number) => Promise<unknown>;
+  config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string } }>;
+  plaidStatus: () => Promise<{ configured: boolean; env: string }>;
+  plaidLinkToken: () => Promise<{ link_token: string }>;
+  plaidExchange: (
+    public_token: string,
+    institution?: { name?: string; institution_id?: string }
+  ) => Promise<{ itemId: string; institutionName: string | null; accounts: number; transactionsAdded: number; holdings: number }>;
+  plaidSync: () => Promise<{ items: number }>;
+};
+
+const liveApi: Api = {
   getState: () => req<AppState>("GET", "/state"),
-  recategorize: (id: string, category: Category) =>
+  recategorize: (id, category) =>
     req("POST", `/transactions/${id}/recategorize`, { category }),
-  addInstitution: (institutionName: string, accounts: Account[], transactions: Transaction[]) =>
+  addInstitution: (institutionName, accounts, transactions) =>
     req("POST", "/institutions", { institutionName, accounts, transactions }),
-  setBudget: (category: Category, amount: number) =>
+  setBudget: (category, amount) =>
     req("POST", "/budgets", { category, amount }),
-  addCategory: (name: string) => req("POST", "/categories", { name }),
-  toggleIncome: (id: string) => req("POST", `/income/${id}/toggle`),
-  setIncomeAmount: (id: string, amount: number) =>
+  addCategory: (name) => req("POST", "/categories", { name }),
+  toggleIncome: (id) => req("POST", `/income/${id}/toggle`),
+  setIncomeAmount: (id, amount) =>
     req("POST", `/income/${id}/amount`, { amount }),
 
-  config: () => req<{ instance: string; plaid: { configured: boolean; env: string } }>("GET", "/config"),
+  config: () => req("GET", "/config"),
 
   // Plaid
-  plaidStatus: () => req<{ configured: boolean; env: string }>("GET", "/plaid/status"),
-  plaidLinkToken: () => req<{ link_token: string }>("POST", "/plaid/link-token"),
-  plaidExchange: (public_token: string, institution?: { name?: string; institution_id?: string }) =>
-    req<{ itemId: string; institutionName: string | null; accounts: number; transactionsAdded: number; holdings: number }>(
-      "POST", "/plaid/exchange", { public_token, institution }
-    ),
-  plaidSync: () => req<{ items: number }>("POST", "/plaid/sync"),
+  plaidStatus: () => req("GET", "/plaid/status"),
+  plaidLinkToken: () => req("POST", "/plaid/link-token"),
+  plaidExchange: (public_token, institution) =>
+    req("POST", "/plaid/exchange", { public_token, institution }),
+  plaidSync: () => req("POST", "/plaid/sync"),
 };
+
+// Backend-less demo: everything resolves locally against the sample data.
+// Mutations are no-ops on the wire — the Zustand store still updates the UI
+// optimistically, so the prototype feels fully interactive in-session.
+function demoState(): AppState {
+  return {
+    accounts: demoAccounts as unknown as Account[],
+    transactions: demoTransactions,
+    income: demoIncome,
+    outflows: demoOutflows,
+    budgets: Object.fromEntries(
+      demoBudgets.map((b) => [b.category, b.baseline])
+    ) as Record<Category, number>,
+    categories: [...DEFAULT_CATEGORIES],
+  };
+}
+
+const demoApi: Api = {
+  getState: async () => demoState(),
+  recategorize: async () => ({ ok: true }),
+  addInstitution: async () => ({ ok: true }),
+  setBudget: async () => ({ ok: true }),
+  addCategory: async () => ({ ok: true }),
+  toggleIncome: async () => ({ ok: true }),
+  setIncomeAmount: async () => ({ ok: true }),
+  config: async () => ({ instance: "demo", plaid: { configured: false, env: "sandbox" } }),
+  plaidStatus: async () => ({ configured: false, env: "sandbox" }),
+  plaidLinkToken: async () => ({ link_token: "" }),
+  plaidExchange: async () => ({ itemId: "", institutionName: null, accounts: 0, transactionsAdded: 0, holdings: 0 }),
+  plaidSync: async () => ({ items: 0 }),
+};
+
+export const api: Api = STATIC_DEMO ? demoApi : liveApi;

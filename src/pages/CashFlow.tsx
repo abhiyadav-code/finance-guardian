@@ -99,7 +99,7 @@ const CashFlow = () => {
     <div className="min-h-screen">
       <TopBar />
 
-      <main className="mx-auto max-w-7xl px-6 py-8 md:px-10 md:py-10">
+      <main className="mx-auto max-w-7xl px-6 py-8 pb-28 md:px-10 md:py-10 md:pb-10">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">
@@ -213,7 +213,7 @@ const CashFlow = () => {
         </section>
 
         {/* Two-column body: streams + budget projector */}
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-2">
           <IncomeCard income={income} onToggle={toggleIncome} onAmount={setIncomeAmount} />
           <OutflowCard outflows={outflows} />
         </div>
@@ -301,7 +301,7 @@ function IncomeCard({
   income, onToggle, onAmount,
 }: { income: IncomeStream[]; onToggle: (id: string) => void; onAmount: (id: string, n: number) => void }) {
   return (
-    <section className="panel p-6 md:p-7">
+    <section className="panel min-w-0 p-6 md:p-7">
       <header className="flex items-end justify-between">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Money in</p>
@@ -352,7 +352,7 @@ function IncomeCard({
 
 function OutflowCard({ outflows }: { outflows: OutflowStream[] }) {
   return (
-    <section className="panel p-6 md:p-7">
+    <section className="panel min-w-0 p-6 md:p-7">
       <header className="flex items-end justify-between">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Money out</p>

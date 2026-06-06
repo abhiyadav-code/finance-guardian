@@ -6,6 +6,10 @@ Finance Guardian is a personal finance app for **time-poor, high-earning profess
 
 This repository is a **working, self-hosted implementation** of the Finance Guardian product spec — productionized to run **locally on your own machine, for a single user, with your financial data never leaving your computer.**
 
+> ### ▶︎ [**Try the interactive demo →**](https://abhiyadav-code.github.io/finance-guardian/)
+>
+> A fully clickable, **mobile-friendly** prototype running on built-in sample data — no install, no sign-up. Tap through the Dashboard, Cash flow, and Transactions screens right from your phone or browser. _(Nothing connects to a real bank; it's the same demo data shown in the screenshots below.)_
+
 ![Finance Guardian dashboard](assets/screenshots/dashboard.png)
 
 <sub>_The dashboard — Guardian status, net worth, layoff runway, and low-noise alerts. Shown with the built-in demo data._</sub>

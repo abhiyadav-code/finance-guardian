@@ -58,7 +58,7 @@ const Transactions = () => {
     <div className="min-h-screen">
       <TopBar />
 
-      <main className="mx-auto max-w-6xl px-6 py-8 md:px-10 md:py-10">
+      <main className="mx-auto max-w-6xl px-6 py-8 pb-28 md:px-10 md:py-10 md:pb-10">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">

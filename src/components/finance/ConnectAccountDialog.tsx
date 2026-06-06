@@ -9,7 +9,7 @@ import {
   Lock, Loader2, Check, ShieldCheck, Sparkles, Building2, AlertTriangle,
 } from "lucide-react";
 import { useFinanceStore } from "@/lib/finance-store";
-import { api } from "@/lib/api";
+import { api, STATIC_DEMO } from "@/lib/api";
 import { toast } from "sonner";
 
 type Step = "intro" | "syncing" | "done" | "unconfigured" | "error";
@@ -163,7 +163,31 @@ export function ConnectAccountDialog({
           </div>
         )}
 
-        {step === "unconfigured" && (
+        {step === "unconfigured" && STATIC_DEMO && (
+          <div className="px-6 py-10">
+            <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-primary/10 ring-1 ring-primary/30">
+              <Sparkles className="h-7 w-7 text-primary" />
+            </div>
+            <h3 className="font-display mt-5 text-center text-2xl">You're in the live demo</h3>
+            <p className="mt-2 text-center text-sm text-muted-foreground">
+              This interactive preview runs on built-in sample data, so there's nothing to connect.
+              In the real app, this is where you'd securely link a bank through Plaid — read-only,
+              and your credentials never touch Guardian.
+            </p>
+            <div className="mt-5 rounded-xl border border-border bg-background/40 p-4 text-sm text-muted-foreground">
+              <ul className="space-y-2">
+                <li className="flex items-center gap-2"><Building2 className="h-4 w-4 text-primary" /> Pick your bank in Plaid's secure window</li>
+                <li className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /> Read-only access · revocable any time</li>
+                <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" /> History imported & auto-categorized</li>
+              </ul>
+            </div>
+            <Button onClick={() => close(false)} className="mt-6 w-full bg-primary text-primary-foreground hover:bg-primary/90">
+              Keep exploring the demo
+            </Button>
+          </div>
+        )}
+
+        {step === "unconfigured" && !STATIC_DEMO && (
           <div className="px-6 py-10">
             <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-primary/10 ring-1 ring-primary/30">
               <Building2 className="h-7 w-7 text-primary" />

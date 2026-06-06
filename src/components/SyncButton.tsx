@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useFinanceStore } from "@/lib/finance-store";
+import { STATIC_DEMO } from "@/lib/api";
 import { toast } from "sonner";
 
 export function SyncButton() {
@@ -12,7 +13,13 @@ export function SyncButton() {
     setBusy(true);
     try {
       await sync();
-      toast.success("Synced with your banks");
+      if (STATIC_DEMO) {
+        toast.success("You're viewing the live demo", {
+          description: "Sample data only — connect a bank in the full app to sync for real.",
+        });
+      } else {
+        toast.success("Synced with your banks");
+      }
     } catch (e) {
       toast.error("Sync failed", { description: e instanceof Error ? e.message : undefined });
     } finally {

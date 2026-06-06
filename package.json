@@ -10,6 +10,7 @@
     "prod": "node --experimental-sqlite --env-file-if-exists=server/.env.prod server/index.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
+    "build:demo": "VITE_STATIC_DEMO=1 vite build --outDir dist-demo --emptyOutDir && cp dist-demo/index.html dist-demo/404.html",
     "host": "npm run build && concurrently -n prod,demo -c green,magenta \"npm:prod\" \"npm:demo\"",
     "start:demo": "npm run build && npm run demo",
     "start:prod": "npm run build && npm run prod",

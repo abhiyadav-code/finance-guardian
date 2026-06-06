@@ -15,7 +15,7 @@ const Index = () => {
     <div className="min-h-screen">
       <TopBar />
 
-      <main className="mx-auto max-w-7xl px-6 py-8 md:px-10 md:py-12">
+      <main className="mx-auto max-w-7xl px-6 py-8 pb-28 md:px-10 md:py-12 md:pb-12">
         {/* Hero / status */}
         <div className="animate-fade-in-up">
           <GuardianStatus />

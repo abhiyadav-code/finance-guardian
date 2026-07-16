@@ -94,6 +94,20 @@ api.post("/income/:id/amount", wrap((req, res) => {
   ok(res);
 }));
 
+// ----- Liabilities -----
+api.patch("/accounts/:id/liability", wrap((req, res) => {
+  const patch = req.body ?? {};
+  const found = store.updateLiability(req.params.id, patch);
+  if (!found) return res.status(404).json({ error: "account not found" });
+  ok(res);
+}));
+
+// Freeze / refresh the checking snapshot used for payment allocation.
+api.post("/liabilities/snapshot", wrap((req, res) => {
+  const { value } = req.body ?? {};
+  res.json({ fundingSnapshot: store.setFundingSnapshot(typeof value === "number" ? value : undefined) });
+}));
+
 // ----- Plaid -----
 const asyncWrap = (fn) => async (req, res) => {
   try {

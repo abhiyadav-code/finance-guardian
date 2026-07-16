@@ -1,9 +1,10 @@
-import { LayoutDashboard, LineChart, ReceiptText } from "lucide-react";
+import { LayoutDashboard, LineChart, Scale, ReceiptText } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 
 const tabs = [
   { to: "/",             label: "Dashboard",    Icon: LayoutDashboard, end: true },
   { to: "/cash-flow",    label: "Cash flow",    Icon: LineChart },
+  { to: "/liabilities",  label: "Liabilities",  Icon: Scale },
   { to: "/transactions", label: "Transactions", Icon: ReceiptText },
 ] as const;
 

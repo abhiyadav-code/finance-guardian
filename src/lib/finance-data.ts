@@ -24,11 +24,54 @@ export type Transaction = {
   userOverride?: boolean;
 };
 
-export const accounts = [
-  { id: "chk", name: "Chase Checking",      balance:   18420.55, type: "checking" as const, mask: "··4421" },
-  { id: "sav", name: "Marcus Savings",      balance:   62300.10, type: "savings"  as const, mask: "··0918" },
-  { id: "brk", name: "Fidelity Brokerage",  balance:  184500.00, type: "investment" as const, mask: "··7733" },
-  { id: "cc",  name: "Amex Platinum",       balance:   -3140.22, type: "credit"   as const, mask: "··1004" },
+export type AccountType = "checking" | "savings" | "investment" | "credit" | "loan";
+export type LiabilityGroup = "monthly" | "deferred" | "zero";
+export type PayStatus = "unpaid" | "scheduled" | "paid";
+
+export type Account = {
+  id: string;
+  name: string;
+  balance: number;
+  type: AccountType;
+  mask: string;
+  institution?: string | null;
+  /** the checking account payments are drawn from (only one) */
+  isFunding?: boolean;
+  // ----- liability fields (carried on credit / loan accounts) -----
+  owner?: string | null;
+  apr?: number | null;              // decimal, e.g. 0.2074
+  creditLimit?: number | null;
+  statementBalance?: number | null;
+  minDue?: number | null;
+  dueDay?: number | null;           // day of month, 1-31
+  autopay?: boolean | null;
+  liabilityGroup?: LiabilityGroup | null;
+  notes?: string | null;
+  payment?: number | null;          // current-cycle allocation
+  payStatus?: PayStatus | null;
+};
+
+// Keep in sync with server/seed.js (the backend is the source of truth; this
+// mirror lets the static demo + first paint render before hydration).
+export const accounts: Account[] = [
+  { id: "chk", name: "Chase Checking",     balance:  18420.55, type: "checking",   mask: "··4421", isFunding: true },
+  { id: "sav", name: "Marcus Savings",     balance:  62300.10, type: "savings",    mask: "··0918" },
+  { id: "brk", name: "Fidelity Brokerage", balance: 184500.00, type: "investment", mask: "··7733" },
+
+  { id: "cc",  name: "Amex Platinum",      balance:  -3140.22, type: "credit", mask: "··1004",
+    owner: "You",     apr: 0.2074, creditLimit: 25000, statementBalance: 3140.22, minDue: 40,  dueDay: 15, autopay: true,  liabilityGroup: "monthly", payment: 3140.22, payStatus: "scheduled", notes: "Pay in full — points card" },
+  { id: "cc2", name: "Chase Sapphire",     balance:  -1840.55, type: "credit", mask: "··7621",
+    owner: "You",     apr: 0.2199, creditLimit: 20000, statementBalance: 1840.55, minDue: 40,  dueDay: 18, autopay: true,  liabilityGroup: "monthly", payment: 600,     payStatus: "unpaid",    notes: "Travel spend" },
+  { id: "cc3", name: "Apple Card",         balance:   -960.10, type: "credit", mask: "··3311",
+    owner: "Partner", apr: 0.1974, creditLimit: 12000, statementBalance: 960.10,  minDue: 30,  dueDay: 30, autopay: true,  liabilityGroup: "monthly", payment: 960.10,  payStatus: "paid",      notes: "Daily driver" },
+
+  { id: "cc4", name: "Citi Balance Transfer", balance: -8200.00, type: "credit", mask: "··2569",
+    owner: "You",     apr: 0.0,    creditLimit: 15000, statementBalance: 0,       minDue: 125, dueDay: 20, autopay: true,  liabilityGroup: "deferred", payment: 250,    payStatus: "paid",   notes: "0% till Jan 2027 (balance tx only)" },
+  { id: "cc5", name: "BofA Visa",          balance: -12500.00, type: "credit", mask: "··1529",
+    owner: "You",     apr: 0.1749, creditLimit: 22000, statementBalance: 0,       minDue: 150, dueDay: 5,  autopay: false, liabilityGroup: "deferred", payment: 300,    payStatus: "unpaid", notes: "0% till Apr 2027 (balance tx only)" },
+
+  { id: "cc6", name: "Discover it",        balance:      0.00, type: "credit", mask: "··0557",
+    owner: "Partner", apr: 0.1899, creditLimit: 10000, statementBalance: 0,       minDue: 0,   dueDay: 10, autopay: false, liabilityGroup: "zero", payment: 0, payStatus: "unpaid", notes: "" },
 ];
 
 const today = new Date();

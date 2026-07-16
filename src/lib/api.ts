@@ -18,7 +18,7 @@ import {
   seedOutflows as demoOutflows,
   seedBudgets as demoBudgets,
 } from "./cashflow-data";
-import type { Account } from "./finance-store";
+import type { Account, LiabilityPatch } from "./finance-store";
 
 /** True when this build is the standalone, backend-less public demo. */
 export const STATIC_DEMO = import.meta.env.VITE_STATIC_DEMO === "1";
@@ -47,6 +47,7 @@ export type AppState = {
   outflows: import("./cashflow-data").OutflowStream[];
   budgets: Record<Category, number>;
   categories: Category[];
+  fundingSnapshot: number | null;
 };
 
 export type Api = {
@@ -57,6 +58,8 @@ export type Api = {
   addCategory: (name: string) => Promise<unknown>;
   toggleIncome: (id: string) => Promise<unknown>;
   setIncomeAmount: (id: string, amount: number) => Promise<unknown>;
+  updateLiability: (id: string, patch: LiabilityPatch) => Promise<unknown>;
+  setFundingSnapshot: (value?: number) => Promise<{ fundingSnapshot: number }>;
   config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string } }>;
   plaidStatus: () => Promise<{ configured: boolean; env: string }>;
   plaidLinkToken: () => Promise<{ link_token: string }>;
@@ -79,6 +82,8 @@ const liveApi: Api = {
   toggleIncome: (id) => req("POST", `/income/${id}/toggle`),
   setIncomeAmount: (id, amount) =>
     req("POST", `/income/${id}/amount`, { amount }),
+  updateLiability: (id, patch) => req("PATCH", `/accounts/${id}/liability`, patch),
+  setFundingSnapshot: (value) => req("POST", "/liabilities/snapshot", { value }),
 
   config: () => req("GET", "/config"),
 
@@ -103,6 +108,7 @@ function demoState(): AppState {
       demoBudgets.map((b) => [b.category, b.baseline])
     ) as Record<Category, number>,
     categories: [...DEFAULT_CATEGORIES],
+    fundingSnapshot: demoAccounts.find((a) => a.isFunding)?.balance ?? null,
   };
 }
 
@@ -114,6 +120,8 @@ const demoApi: Api = {
   addCategory: async () => ({ ok: true }),
   toggleIncome: async () => ({ ok: true }),
   setIncomeAmount: async () => ({ ok: true }),
+  updateLiability: async () => ({ ok: true }),
+  setFundingSnapshot: async (value) => ({ fundingSnapshot: value ?? 0 }),
   config: async () => ({ instance: "demo", plaid: { configured: false, env: "sandbox" } }),
   plaidStatus: async () => ({ configured: false, env: "sandbox" }),
   plaidLinkToken: async () => ({ link_token: "" }),

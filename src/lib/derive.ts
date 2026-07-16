@@ -1,7 +1,7 @@
 // Derive dashboard figures (net worth, runway, budgets, insights) from live
 // store data instead of hardcoded sample values. With no data (a fresh
 // production instance) everything resolves to zero / empty states.
-import type { Transaction, Category } from "./finance-data";
+import type { Transaction, Category, LiabilityGroup } from "./finance-data";
 import type { Account } from "./finance-store";
 
 const LIQUID_TYPES = new Set(["checking", "savings"]);
@@ -118,4 +118,130 @@ export function deriveBudgetRows(
   return (Object.entries(budgets) as [Category, number][])
     .map(([category, baseline]) => ({ category, baseline, spent: Math.round(spentByCat.get(category) ?? 0) }))
     .sort((a, b) => (b.spent / (b.baseline || 1)) - (a.spent / (a.baseline || 1)));
+}
+
+// ----- Liabilities (debt management) -----
+
+export const LIABILITY_TYPES = new Set(["credit", "loan"]);
+
+export const LIABILITY_GROUP_ORDER: LiabilityGroup[] = ["monthly", "deferred", "zero"];
+export const LIABILITY_GROUP_LABEL: Record<LiabilityGroup, string> = {
+  monthly: "Monthly",
+  deferred: "Long-term / deferred",
+  zero: "Zero balance",
+};
+
+export const isLiability = (a: Account) => LIABILITY_TYPES.has(a.type);
+
+/** Amount currently owed on an account (credit/loan balances are stored negative). */
+export const owedOf = (a: Account) => Math.max(0, -a.balance);
+
+export type LiabilityRow = {
+  account: Account;
+  owed: number;
+  payment: number;
+  nextMonthOwed: number;
+  statement: number;
+  minDue: number;
+  utilization: number | null;   // owed / limit
+  estInterest: number;          // owed * apr / 12 (approx; promo periods will overstate)
+};
+
+export type LiabilityGroupView = {
+  group: LiabilityGroup;
+  label: string;
+  rows: LiabilityRow[];
+  owed: number;
+  nextMonthOwed: number;
+  payment: number;
+  minDue: number;
+  statement: number;
+};
+
+export type LiabilitiesView = {
+  groups: LiabilityGroupView[];
+  // grand totals
+  totalOwed: number;
+  totalNextMonthOwed: number;
+  totalPayment: number;
+  totalMinDue: number;
+  totalStatement: number;
+  hasLiabilities: boolean;
+  // funding / allocation
+  fundingAccount: Account | null;
+  snapshot: number;
+  allocated: number;      // = totalPayment
+  remaining: number;      // snapshot - allocated
+  pctAllocated: number;   // allocated / snapshot (0-1+, can exceed 1)
+  overAllocated: boolean;
+};
+
+function groupOf(a: Account): LiabilityGroup {
+  if (a.liabilityGroup) return a.liabilityGroup;
+  return owedOf(a) > 0 ? "monthly" : "zero"; // sensible fallback for un-tagged debts
+}
+
+export function deriveLiabilities(
+  accounts: Account[],
+  fundingSnapshot: number | null
+): LiabilitiesView {
+  const liabilities = accounts.filter(isLiability);
+
+  const toRow = (a: Account): LiabilityRow => {
+    const owed = owedOf(a);
+    const payment = Math.max(0, a.payment ?? 0);
+    return {
+      account: a,
+      owed,
+      payment,
+      nextMonthOwed: Math.max(0, owed - payment),
+      statement: a.statementBalance ?? 0,
+      minDue: a.minDue ?? 0,
+      utilization: a.creditLimit && a.creditLimit > 0 ? owed / a.creditLimit : null,
+      estInterest: a.apr && a.apr > 0 ? (owed * a.apr) / 12 : 0,
+    };
+  };
+
+  const groups: LiabilityGroupView[] = LIABILITY_GROUP_ORDER.map((group) => {
+    const rows = liabilities.filter((a) => groupOf(a) === group).map(toRow);
+    const sum = (pick: (r: LiabilityRow) => number) => rows.reduce((s, r) => s + pick(r), 0);
+    return {
+      group,
+      label: LIABILITY_GROUP_LABEL[group],
+      rows,
+      owed: sum((r) => r.owed),
+      nextMonthOwed: sum((r) => r.nextMonthOwed),
+      payment: sum((r) => r.payment),
+      minDue: sum((r) => r.minDue),
+      statement: sum((r) => r.statement),
+    };
+  }).filter((g) => g.rows.length > 0);
+
+  const grand = <K extends keyof LiabilityGroupView>(key: K) =>
+    groups.reduce((s, g) => s + (g[key] as number), 0);
+
+  // Funding source: the flagged account, else the largest checking account.
+  const fundingAccount =
+    accounts.find((a) => a.isFunding) ??
+    accounts.filter((a) => a.type === "checking").sort((a, b) => b.balance - a.balance)[0] ??
+    null;
+  const snapshot = fundingSnapshot ?? fundingAccount?.balance ?? 0;
+  const allocated = grand("payment");
+  const remaining = snapshot - allocated;
+
+  return {
+    groups,
+    totalOwed: grand("owed"),
+    totalNextMonthOwed: grand("nextMonthOwed"),
+    totalPayment: allocated,
+    totalMinDue: grand("minDue"),
+    totalStatement: grand("statement"),
+    hasLiabilities: liabilities.length > 0,
+    fundingAccount,
+    snapshot,
+    allocated,
+    remaining,
+    pctAllocated: snapshot > 0 ? allocated / snapshot : 0,
+    overAllocated: allocated > snapshot,
+  };
 }

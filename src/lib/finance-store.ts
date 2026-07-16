@@ -11,6 +11,7 @@ import {
   DEFAULT_CATEGORIES,
   type Transaction,
   type Category,
+  type Account,
 } from "./finance-data";
 import {
   seedIncome, seedOutflows, seedBudgets,
@@ -19,7 +20,17 @@ import {
 import { api } from "./api";
 import { toast } from "sonner";
 
-export type Account = (typeof seedAccounts)[number];
+export type { Account } from "./finance-data";
+
+/** Editable liability fields (subset of Account) the Liabilities page can patch. */
+export type LiabilityPatch = Partial<
+  Pick<
+    Account,
+    | "owner" | "apr" | "creditLimit" | "statementBalance" | "balance"
+    | "minDue" | "dueDay" | "autopay" | "liabilityGroup" | "notes"
+    | "payment" | "payStatus"
+  >
+>;
 
 type State = {
   transactions: Transaction[];
@@ -30,6 +41,8 @@ type State = {
   budgets: Record<Category, number>;
   /** all selectable categories (built-in + user-added custom ones) */
   categories: Category[];
+  /** frozen checking balance the payment allocation draws from (null = use live) */
+  fundingSnapshot: number | null;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -41,6 +54,10 @@ type State = {
   setBudget: (category: Category, amount: number) => void;
   toggleIncome: (id: string) => void;
   setIncomeAmount: (id: string, amount: number) => void;
+  /** patch liability fields on an account (Liabilities page) */
+  updateLiability: (id: string, patch: LiabilityPatch) => void;
+  /** freeze the checking snapshot; omit value to capture the live balance */
+  setFundingSnapshot: (value?: number) => void;
 };
 
 const initialBudgets = Object.fromEntries(
@@ -63,6 +80,7 @@ export const useFinanceStore = create<State>((set, get) => ({
   outflows: seedOutflows,
   budgets: initialBudgets,
   categories: [...DEFAULT_CATEGORIES],
+  fundingSnapshot: seedAccounts.find((a) => a.isFunding)?.balance ?? null,
   hydrated: false,
 
   hydrate: async () => {
@@ -75,6 +93,7 @@ export const useFinanceStore = create<State>((set, get) => ({
         outflows: state.outflows,
         budgets: state.budgets,
         categories: state.categories?.length ? state.categories : [...DEFAULT_CATEGORIES],
+        fundingSnapshot: state.fundingSnapshot ?? null,
         hydrated: true,
       });
     } catch (e) {
@@ -125,6 +144,20 @@ export const useFinanceStore = create<State>((set, get) => ({
     const amt = Math.max(0, Math.round(amount));
     set((s) => ({ income: s.income.map((i) => (i.id === id ? { ...i, amount: amt } : i)) }));
     persist(api.setIncomeAmount(id, amt), "setIncomeAmount");
+  },
+  updateLiability: (id, patch) => {
+    set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)) }));
+    persist(api.updateLiability(id, patch), "updateLiability");
+  },
+  setFundingSnapshot: (value) => {
+    set((s) => {
+      const funding =
+        s.accounts.find((a) => a.isFunding) ??
+        s.accounts.filter((a) => a.type === "checking").sort((a, b) => b.balance - a.balance)[0];
+      const next = value !== undefined ? value : funding?.balance ?? s.fundingSnapshot ?? 0;
+      return { fundingSnapshot: next };
+    });
+    persist(api.setFundingSnapshot(value), "setFundingSnapshot");
   },
 }));
 

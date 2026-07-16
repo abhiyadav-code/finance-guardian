@@ -101,6 +101,21 @@ addColumnIfMissing("accounts", "item_id", "item_id TEXT");
 addColumnIfMissing("transactions", "item_id", "item_id TEXT");
 addColumnIfMissing("transactions", "pending", "pending INTEGER NOT NULL DEFAULT 0");
 
+// Liability / debt-management columns on accounts (power the Liabilities page).
+// All nullable so non-debt accounts are unaffected.
+addColumnIfMissing("accounts", "owner", "owner TEXT");
+addColumnIfMissing("accounts", "apr", "apr REAL");
+addColumnIfMissing("accounts", "credit_limit", "credit_limit REAL");
+addColumnIfMissing("accounts", "statement_balance", "statement_balance REAL");
+addColumnIfMissing("accounts", "min_due", "min_due REAL");
+addColumnIfMissing("accounts", "due_day", "due_day INTEGER");
+addColumnIfMissing("accounts", "autopay", "autopay INTEGER");
+addColumnIfMissing("accounts", "liability_group", "liability_group TEXT");
+addColumnIfMissing("accounts", "notes", "notes TEXT");
+addColumnIfMissing("accounts", "payment", "payment REAL");
+addColumnIfMissing("accounts", "pay_status", "pay_status TEXT");
+addColumnIfMissing("accounts", "is_funding", "is_funding INTEGER NOT NULL DEFAULT 0");
+
 // ----- Seed the built-in category taxonomy (always, all instances) -----
 // Categories are app config, not sample financial data, so this runs regardless
 // of FG_SEED. Idempotent via INSERT OR IGNORE.
@@ -124,7 +139,10 @@ function seedIfEmpty() {
   if (seeded) return;
 
   const insAccount = db.prepare(
-    "INSERT INTO accounts (id, name, balance, type, mask, institution) VALUES (?, ?, ?, ?, ?, ?)"
+    `INSERT INTO accounts
+       (id, name, balance, type, mask, institution, is_funding,
+        owner, apr, credit_limit, statement_balance, min_due, due_day, autopay, liability_group, notes, payment, pay_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insTx = db.prepare(
     `INSERT INTO transactions (id, date, merchant, amount, category, account, flagged, confidence, essential, user_override)
@@ -140,7 +158,18 @@ function seedIfEmpty() {
 
   db.exec("BEGIN");
   try {
-    for (const a of seedAccounts) insAccount.run(a.id, a.name, a.balance, a.type, a.mask, a.institution);
+    for (const a of seedAccounts)
+      insAccount.run(
+        a.id, a.name, a.balance, a.type, a.mask, a.institution, a.isFunding ? 1 : 0,
+        a.owner ?? null, a.apr ?? null, a.creditLimit ?? null, a.statementBalance ?? null,
+        a.minDue ?? null, a.dueDay ?? null,
+        a.autopay === undefined ? null : (a.autopay ? 1 : 0),
+        a.liabilityGroup ?? null, a.notes ?? null, a.payment ?? null, a.payStatus ?? null
+      );
+    // Freeze the starting funding-account balance for the payment cycle.
+    const funding = seedAccounts.find((a) => a.isFunding);
+    if (funding)
+      db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('funding_snapshot', ?)").run(String(funding.balance));
     for (const t of seedTransactions)
       insTx.run(t.id, t.date, t.merchant, t.amount, t.category, t.account, t.flagged, t.confidence, t.essential ? 1 : 0, t.userOverride ? 1 : 0);
     for (const i of seedIncome) insIncome.run(i.id, i.source, i.amount, i.cadence, i.nextDate, i.kind, i.active ? 1 : 0);
@@ -156,7 +185,22 @@ function seedIfEmpty() {
 seedIfEmpty();
 
 // ----- Row -> API shape mappers (match the frontend's Zustand store types) -----
-const toAccount = (r) => ({ id: r.id, name: r.name, balance: r.balance, type: r.type, mask: r.mask });
+const toAccount = (r) => ({
+  id: r.id, name: r.name, balance: r.balance, type: r.type, mask: r.mask,
+  institution: r.institution ?? null,
+  isFunding: !!r.is_funding,
+  owner: r.owner ?? null,
+  apr: r.apr ?? null,
+  creditLimit: r.credit_limit ?? null,
+  statementBalance: r.statement_balance ?? null,
+  minDue: r.min_due ?? null,
+  dueDay: r.due_day ?? null,
+  autopay: r.autopay === null || r.autopay === undefined ? null : !!r.autopay,
+  liabilityGroup: r.liability_group ?? null,
+  notes: r.notes ?? null,
+  payment: r.payment ?? null,
+  payStatus: r.pay_status ?? null,
+});
 const toTransaction = (r) => ({
   id: r.id, date: r.date, merchant: r.merchant, amount: r.amount, category: r.category,
   account: r.account, flagged: r.flagged ?? null, confidence: r.confidence,
@@ -183,7 +227,9 @@ export function getState() {
     .prepare("SELECT name FROM categories ORDER BY builtin DESC, (position IS NULL), position ASC, name ASC")
     .all()
     .map((r) => r.name);
-  return { accounts, transactions, income, outflows, budgets, categories };
+  const snapRow = db.prepare("SELECT value FROM meta WHERE key = 'funding_snapshot'").get();
+  const fundingSnapshot = snapRow ? Number(snapRow.value) : null;
+  return { accounts, transactions, income, outflows, budgets, categories, fundingSnapshot };
 }
 
 // Add a custom category (idempotent, case-insensitive de-dup). Returns the
@@ -238,6 +284,58 @@ export function toggleIncome(id) {
 
 export function setIncomeAmount(id, amount) {
   db.prepare("UPDATE income_streams SET amount = ? WHERE id = ?").run(Math.max(0, Math.round(amount)), id);
+}
+
+// ----- Liabilities: per-account debt fields + payment cycle -----
+// Whitelisted, editable liability fields keyed by API name -> column.
+const LIABILITY_COLUMNS = {
+  owner: "owner",
+  apr: "apr",
+  creditLimit: "credit_limit",
+  statementBalance: "statement_balance",
+  balance: "balance",
+  minDue: "min_due",
+  dueDay: "due_day",
+  autopay: "autopay",
+  liabilityGroup: "liability_group",
+  notes: "notes",
+  payment: "payment",
+  payStatus: "pay_status",
+};
+
+// Update one or more liability fields on an account. Booleans (autopay) are
+// coerced to 0/1; unknown keys are ignored.
+export function updateLiability(id, patch = {}) {
+  const sets = [];
+  const vals = [];
+  for (const [key, col] of Object.entries(LIABILITY_COLUMNS)) {
+    if (!(key in patch)) continue;
+    let v = patch[key];
+    if (key === "autopay") v = v === null ? null : v ? 1 : 0;
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  }
+  if (!sets.length) return false;
+  vals.push(id);
+  const r = db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  return r.changes > 0;
+}
+
+// Freeze (or refresh) the checking snapshot the payment allocation draws from.
+// With no explicit value, capture the current funding account's balance.
+export function setFundingSnapshot(value) {
+  let v = value;
+  if (v === undefined || v === null) {
+    // Capture the flagged funding account, else the largest checking account.
+    const f =
+      db.prepare("SELECT balance FROM accounts WHERE is_funding = 1 LIMIT 1").get() ||
+      db.prepare("SELECT balance FROM accounts WHERE type = 'checking' ORDER BY balance DESC LIMIT 1").get();
+    v = f ? f.balance : 0;
+  }
+  db.prepare(
+    "INSERT INTO meta (key, value) VALUES ('funding_snapshot', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(String(v));
+  return Number(v);
 }
 
 // ----- Plaid item + account/transaction sync persistence -----

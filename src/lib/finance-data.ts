@@ -27,6 +27,8 @@ export type Transaction = {
 export type AccountType = "checking" | "savings" | "investment" | "credit" | "loan";
 export type LiabilityGroup = "monthly" | "deferred" | "zero";
 export type PayStatus = "unpaid" | "scheduled" | "paid";
+export type DebtClass = "revolving" | "installment";
+export type PromoKind = "purchase" | "balance_transfer";
 
 export type Account = {
   id: string;
@@ -38,17 +40,23 @@ export type Account = {
   /** the checking account payments are drawn from (only one) */
   isFunding?: boolean;
   // ----- liability fields (carried on credit / loan accounts) -----
+  /** revolving = credit cards (Liabilities page); installment = loans (Loans page) */
+  debtClass?: DebtClass | null;
   owner?: string | null;
-  apr?: number | null;              // decimal, e.g. 0.2074
+  apr?: number | null;              // decimal go-to rate, e.g. 0.2074
   creditLimit?: number | null;
   statementBalance?: number | null;
   minDue?: number | null;
   dueDay?: number | null;           // day of month, 1-31
   autopay?: boolean | null;
-  liabilityGroup?: LiabilityGroup | null;
+  liabilityGroup?: LiabilityGroup | null; // legacy; bucket is auto-derived now
   notes?: string | null;
-  payment?: number | null;          // current-cycle allocation
+  payment?: number | null;          // current-cycle allocation (null = auto)
   payStatus?: PayStatus | null;
+  // ----- 0%-APR promo (revolving) -----
+  promoKind?: PromoKind | null;
+  promoAprUntil?: string | null;        // ISO date the 0% promo ends
+  balanceTransferDate?: string | null;  // ISO date a balance transfer posted
 };
 
 // Keep in sync with server/seed.js (the backend is the source of truth; this
@@ -58,20 +66,30 @@ export const accounts: Account[] = [
   { id: "sav", name: "Marcus Savings",     balance:  62300.10, type: "savings",    mask: "··0918" },
   { id: "brk", name: "Fidelity Brokerage", balance: 184500.00, type: "investment", mask: "··7733" },
 
-  { id: "cc",  name: "Amex Platinum",      balance:  -3140.22, type: "credit", mask: "··1004",
-    owner: "You",     apr: 0.2074, creditLimit: 25000, statementBalance: 3140.22, minDue: 40,  dueDay: 15, autopay: true,  liabilityGroup: "monthly", payment: 3140.22, payStatus: "scheduled", notes: "Pay in full — points card" },
-  { id: "cc2", name: "Chase Sapphire",     balance:  -1840.55, type: "credit", mask: "··7621",
-    owner: "You",     apr: 0.2199, creditLimit: 20000, statementBalance: 1840.55, minDue: 40,  dueDay: 18, autopay: true,  liabilityGroup: "monthly", payment: 600,     payStatus: "unpaid",    notes: "Travel spend" },
-  { id: "cc3", name: "Apple Card",         balance:   -960.10, type: "credit", mask: "··3311",
-    owner: "Partner", apr: 0.1974, creditLimit: 12000, statementBalance: 960.10,  minDue: 30,  dueDay: 30, autopay: true,  liabilityGroup: "monthly", payment: 960.10,  payStatus: "paid",      notes: "Daily driver" },
+  // Revolving credit → Liabilities page
+  { id: "cc",  name: "Amex Platinum",      balance:  -3140.22, type: "credit", mask: "··1004", debtClass: "revolving",
+    owner: "You",     apr: 0.2074, creditLimit: 25000, statementBalance: 3140.22, minDue: 40,  dueDay: 15, autopay: true,  payment: 3140.22, payStatus: "scheduled", notes: "Pay in full — points card" },
+  { id: "cc2", name: "Chase Sapphire",     balance:  -1840.55, type: "credit", mask: "··7621", debtClass: "revolving",
+    owner: "You",     apr: 0.2199, creditLimit: 20000, statementBalance: 1840.55, minDue: 40,  dueDay: 18, autopay: true,  payment: 600,     payStatus: "unpaid",    notes: "Travel spend" },
+  { id: "cc3", name: "Apple Card",         balance:   -960.10, type: "credit", mask: "··3311", debtClass: "revolving",
+    owner: "Partner", apr: 0.1974, creditLimit: 12000, statementBalance: 960.10,  minDue: 30,  dueDay: 30, autopay: true,  payment: 960.10,  payStatus: "paid",      notes: "Daily driver" },
 
-  { id: "cc4", name: "Citi Balance Transfer", balance: -8200.00, type: "credit", mask: "··2569",
-    owner: "You",     apr: 0.0,    creditLimit: 15000, statementBalance: 0,       minDue: 125, dueDay: 20, autopay: true,  liabilityGroup: "deferred", payment: 250,    payStatus: "paid",   notes: "0% till Jan 2027 (balance tx only)" },
-  { id: "cc5", name: "BofA Visa",          balance: -12500.00, type: "credit", mask: "··1529",
-    owner: "You",     apr: 0.1749, creditLimit: 22000, statementBalance: 0,       minDue: 150, dueDay: 5,  autopay: false, liabilityGroup: "deferred", payment: 300,    payStatus: "unpaid", notes: "0% till Apr 2027 (balance tx only)" },
+  // 0%-APR promo balances (auto-bucket to "deferred"; payment auto-fills to min due → left null)
+  { id: "cc4", name: "Citi Balance Transfer", balance: -8200.00, type: "credit", mask: "··2569", debtClass: "revolving",
+    owner: "You",     apr: 0.2099, creditLimit: 15000, statementBalance: 8200, minDue: 125, dueDay: 20, autopay: true,
+    promoKind: "balance_transfer", balanceTransferDate: "2025-07-15", promoAprUntil: "2027-01-15", payStatus: "paid", notes: "0% balance transfer" },
+  { id: "cc5", name: "BofA Visa",          balance: -12500.00, type: "credit", mask: "··1529", debtClass: "revolving",
+    owner: "You",     apr: 0.2174, creditLimit: 22000, statementBalance: 12500, minDue: 150, dueDay: 5,  autopay: true,
+    promoKind: "balance_transfer", balanceTransferDate: "2025-10-10", promoAprUntil: "2027-04-15", payStatus: "unpaid", notes: "Atmos Rewards — 0% BT" },
 
-  { id: "cc6", name: "Discover it",        balance:      0.00, type: "credit", mask: "··0557",
-    owner: "Partner", apr: 0.1899, creditLimit: 10000, statementBalance: 0,       minDue: 0,   dueDay: 10, autopay: false, liabilityGroup: "zero", payment: 0, payStatus: "unpaid", notes: "" },
+  { id: "cc6", name: "Discover it",        balance:      0.00, type: "credit", mask: "··0557", debtClass: "revolving",
+    owner: "Partner", apr: 0.1899, creditLimit: 10000, statementBalance: 0,       minDue: 0,   dueDay: 10, autopay: false, payStatus: "unpaid", notes: "" },
+
+  // Installment loans → Loans page
+  { id: "ln1", name: "Tesla Auto Loan",    balance: -28500.00, type: "loan", mask: "··8842", debtClass: "installment",
+    owner: "You",     apr: 0.0489, statementBalance: 680, minDue: 680, dueDay: 15, autopay: true,  payment: 680, notes: "72-mo term" },
+  { id: "ln2", name: "SoFi Student Loan",  balance: -18200.00, type: "loan", mask: "··3390", debtClass: "installment",
+    owner: "Partner", apr: 0.0650, statementBalance: 240, minDue: 240, dueDay: 1,  autopay: true,  payment: 240, notes: "" },
 ];
 
 const today = new Date();

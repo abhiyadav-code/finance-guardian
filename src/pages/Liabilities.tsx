@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft, Wallet, CreditCard, AlertTriangle, Check, Clock, Circle,
-  Pencil, RefreshCw, Landmark,
+  Pencil, RefreshCw, Landmark, BadgePercent,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Input } from "@/components/ui/input";
@@ -15,9 +15,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useFinanceStore, type Account } from "@/lib/finance-store";
-import { fmt, fmtCents, type LiabilityGroup, type PayStatus } from "@/lib/finance-data";
+import { fmt, fmtCents, type DebtClass, type PayStatus, type PromoKind } from "@/lib/finance-data";
 import {
-  deriveLiabilities, type LiabilityRow, type LiabilityGroupView,
+  deriveLiabilities, isPromoActive, type LiabilityRow, type LiabilityGroupView,
 } from "@/lib/derive";
 import { toast } from "sonner";
 
@@ -27,6 +27,8 @@ const ordinal = (d: number) => {
   const s = ["th", "st", "nd", "rd"], v = d % 100;
   return d + (s[(v - 20) % 10] || s[v] || s[0]);
 };
+const monthYear = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : "";
 
 const STATUS_META: Record<PayStatus, { label: string; Icon: typeof Check; cls: string }> = {
   unpaid:    { label: "Unpaid",    Icon: Circle, cls: "border-border bg-secondary text-muted-foreground" },
@@ -231,19 +233,13 @@ function LiabilityTableRow({ row }: { row: LiabilityRow }) {
   return (
     <tr className="bg-card/40 [&>td]:border-y [&>td]:border-border/60 [&>td:first-child]:rounded-l-lg [&>td:first-child]:border-l [&>td:last-child]:rounded-r-lg [&>td:last-child]:border-r">
       <td className="px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <OwnerBadge owner={a.owner} />
-          <div className="min-w-0">
-            <p className="truncate font-medium leading-tight">{a.name}</p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              {a.institution && a.institution !== "Seed" ? `${a.institution} · ` : ""}{a.mask}
-            </p>
-          </div>
-        </div>
+        <AccountIdentity account={a} />
       </td>
       <td className="px-3 py-2.5 text-right font-mono-fin tabular-nums">{fmtCents(row.owed)}</td>
       <td className="px-3 py-2.5 text-right font-mono-fin tabular-nums text-muted-foreground">{fmtCents(row.statement)}</td>
-      <td className="px-3 py-2.5 text-right font-mono-fin tabular-nums text-muted-foreground">{a.apr != null ? pct(a.apr) : "—"}</td>
+      <td className="px-3 py-2.5 text-right font-mono-fin tabular-nums">
+        <AprCell row={row} />
+      </td>
       <td className={`px-3 py-2.5 text-right font-mono-fin tabular-nums ${utilTone(row.utilization)}`}>
         {row.utilization != null ? `${Math.round(row.utilization * 100)}%` : "—"}
       </td>
@@ -253,7 +249,7 @@ function LiabilityTableRow({ row }: { row: LiabilityRow }) {
         <Switch checked={!!a.autopay} onCheckedChange={(v) => update(a.id, { autopay: v })} />
       </td>
       <td className="px-3 py-2.5 text-right">
-        <PaymentInput value={row.payment} onChange={(n) => update(a.id, { payment: n })} className="w-28" />
+        <PaymentInput value={row.payment} auto={row.paymentAuto} onChange={(n) => update(a.id, { payment: n })} className="w-28" />
       </td>
       <td className="px-3 py-2.5 text-center">
         <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
@@ -277,15 +273,7 @@ function LiabilityCard({ row }: { row: LiabilityRow }) {
   return (
     <div className="panel p-4">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <OwnerBadge owner={a.owner} />
-          <div className="min-w-0">
-            <p className="truncate font-medium leading-tight">{a.name}</p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              {a.institution && a.institution !== "Seed" ? `${a.institution} · ` : ""}{a.mask}
-            </p>
-          </div>
-        </div>
+        <AccountIdentity account={a} />
         <EditLiability account={a} />
       </div>
 
@@ -301,7 +289,11 @@ function LiabilityCard({ row }: { row: LiabilityRow }) {
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2 border-t border-border pt-3 text-xs">
-        <Field label="APR" value={a.apr != null ? pct(a.apr) : "—"} />
+        <Field
+          label="APR"
+          value={row.promoActive ? "0%" : a.apr != null ? pct(a.apr) : "—"}
+          tone={row.promoActive ? "text-success" : undefined}
+        />
         <Field label="Limit" value={a.creditLimit ? fmt(a.creditLimit) : "—"} />
         <Field label="Util" value={row.utilization != null ? `${Math.round(row.utilization * 100)}%` : "—"} tone={utilTone(row.utilization)} />
         <Field label="Min due" value={fmtCents(row.minDue)} />
@@ -315,7 +307,7 @@ function LiabilityCard({ row }: { row: LiabilityRow }) {
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
         <div className="flex items-center gap-2">
           <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Pay</span>
-          <PaymentInput value={row.payment} onChange={(n) => update(a.id, { payment: n })} className="w-24" />
+          <PaymentInput value={row.payment} auto={row.paymentAuto} onChange={(n) => update(a.id, { payment: n })} className="w-24" />
           <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
         </div>
         <div className="text-right">
@@ -365,14 +357,33 @@ function Field({ label, value, tone }: { label: string; value: string; tone?: st
   );
 }
 
-function OwnerBadge({ owner }: { owner?: string | null }) {
-  const initial = (owner || "?").charAt(0).toUpperCase();
+// Account identity: card icon + name + owner chip + mask, and a 0%-promo badge.
+function AccountIdentity({ account: a }: { account: Account }) {
+  const promo = isPromoActive(a);
   return (
-    <div
-      className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-secondary text-xs font-semibold text-foreground/70 ring-1 ring-border"
-      title={owner || "Owner not set"}
-    >
-      {initial}
+    <div className="flex items-center gap-2.5">
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-secondary text-muted-foreground ring-1 ring-border">
+        <CreditCard className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <p className="truncate font-medium leading-tight">{a.name}</p>
+          {a.owner && (
+            <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground ring-1 ring-border">
+              {a.owner}
+            </span>
+          )}
+        </div>
+        <p className="truncate text-[11px] text-muted-foreground">
+          {a.institution && a.institution !== "Seed" ? `${a.institution} · ` : ""}{a.mask}
+        </p>
+        {promo && (
+          <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+            <BadgePercent className="h-2.5 w-2.5" />
+            {a.promoKind === "balance_transfer" ? "0% BT" : "0% intro"} · till {monthYear(a.promoAprUntil)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -390,9 +401,25 @@ function StatusPill({ status, onCycle }: { status: PayStatus; onCycle: () => voi
   );
 }
 
+// APR cell: shows 0% (green) with a tooltip during a live promo, else the go-to rate.
+function AprCell({ row }: { row: LiabilityRow }) {
+  const a = row.account;
+  if (row.promoActive) {
+    return (
+      <span
+        className="text-success"
+        title={`0% promo till ${monthYear(a.promoAprUntil)} · go-to ${a.apr != null ? pct(a.apr) : "—"}`}
+      >
+        0%
+      </span>
+    );
+  }
+  return <span className="text-muted-foreground">{a.apr != null ? pct(a.apr) : "—"}</span>;
+}
+
 function PaymentInput({
-  value, onChange, className,
-}: { value: number; onChange: (n: number) => void; className?: string }) {
+  value, auto, onChange, className,
+}: { value: number; auto?: boolean; onChange: (n: number) => void; className?: string }) {
   return (
     <div className="relative inline-block">
       <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
@@ -401,8 +428,9 @@ function PaymentInput({
         inputMode="decimal"
         value={value ? String(value) : ""}
         placeholder="0"
+        title={auto ? "Auto-filled to the minimum due (0% promo)" : undefined}
         onChange={(e) => onChange(Math.max(0, Number(e.target.value) || 0))}
-        className={`h-8 pl-5 text-right font-mono-fin text-sm tabular-nums ${className ?? ""}`}
+        className={`h-8 pl-5 text-right font-mono-fin text-sm tabular-nums ${auto ? "text-primary/90 ring-1 ring-primary/30" : ""} ${className ?? ""}`}
       />
     </div>
   );
@@ -426,11 +454,7 @@ function NotesInput({
 
 // ---------- Edit account attributes ----------
 
-const GROUP_OPTIONS: { value: LiabilityGroup; label: string }[] = [
-  { value: "monthly", label: "Monthly" },
-  { value: "deferred", label: "Long-term / deferred" },
-  { value: "zero", label: "Zero balance" },
-];
+const PROMO_NONE = "none";
 
 function EditLiability({ account }: { account: Account }) {
   const update = useFinanceStore((s) => s.updateLiability);
@@ -444,11 +468,15 @@ function EditLiability({ account }: { account: Account }) {
   const [limit, setLimit] = useState(String(account.creditLimit ?? ""));
   const [minDue, setMinDue] = useState(String(account.minDue ?? 0));
   const [dueDay, setDueDay] = useState(String(account.dueDay ?? ""));
-  const [group, setGroup] = useState<LiabilityGroup>(account.liabilityGroup ?? "monthly");
+  const [debtClass, setDebtClass] = useState<DebtClass>(account.debtClass ?? (account.type === "loan" ? "installment" : "revolving"));
+  const [promoKind, setPromoKind] = useState<PromoKind | typeof PROMO_NONE>(account.promoKind ?? PROMO_NONE);
+  const [promoUntil, setPromoUntil] = useState((account.promoAprUntil ?? "").slice(0, 10));
+  const [btDate, setBtDate] = useState((account.balanceTransferDate ?? "").slice(0, 10));
 
   const num = (s: string) => (s.trim() === "" ? null : Number(s));
 
   const save = () => {
+    const isBT = promoKind === "balance_transfer";
     update(account.id, {
       owner: owner.trim() || null,
       balance: -(Number(owed) || 0), // stored negative (amount owed)
@@ -457,7 +485,10 @@ function EditLiability({ account }: { account: Account }) {
       creditLimit: num(limit),
       minDue: num(minDue),
       dueDay: dueDay.trim() === "" ? null : Math.min(31, Math.max(1, Number(dueDay) || 1)),
-      liabilityGroup: group,
+      debtClass,
+      promoKind: promoKind === PROMO_NONE ? null : promoKind,
+      promoAprUntil: promoKind === PROMO_NONE ? null : (promoUntil || null),
+      balanceTransferDate: isBT ? (btDate || null) : null,
     });
     setOpen(false);
     toast.success(`Updated ${account.name}`);
@@ -473,7 +504,7 @@ function EditLiability({ account }: { account: Account }) {
           <Pencil className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-4">
+      <PopoverContent align="end" className="max-h-[80vh] w-72 overflow-y-auto p-4">
         <p className="font-display text-lg">{account.name}</p>
         <p className="mb-3 text-[11px] text-muted-foreground">{account.mask}</p>
 
@@ -487,7 +518,7 @@ function EditLiability({ account }: { account: Account }) {
           <EditField label="Statement">
             <Input type="number" value={statement} onChange={(e) => setStatement(e.target.value)} className="h-8 text-sm" />
           </EditField>
-          <EditField label="APR %">
+          <EditField label="APR % (go-to)">
             <Input type="number" value={aprPct} onChange={(e) => setAprPct(e.target.value)} placeholder="20.74" className="h-8 text-sm" />
           </EditField>
           <EditField label="Limit">
@@ -499,17 +530,49 @@ function EditLiability({ account }: { account: Account }) {
           <EditField label="Due day">
             <Input type="number" value={dueDay} onChange={(e) => setDueDay(e.target.value)} placeholder="15" className="h-8 text-sm" />
           </EditField>
-          <EditField label="Group" span>
-            <Select value={group} onValueChange={(v) => setGroup(v as LiabilityGroup)}>
+          <EditField label="Type" span>
+            <Select value={debtClass} onValueChange={(v) => setDebtClass(v as DebtClass)}>
               <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {GROUP_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
+                <SelectItem value="revolving">Credit card (revolving)</SelectItem>
+                <SelectItem value="installment">Loan (installment)</SelectItem>
               </SelectContent>
             </Select>
           </EditField>
+
+          {debtClass === "revolving" && (
+            <>
+              <EditField label="0% APR promo" span>
+                <Select value={promoKind} onValueChange={(v) => setPromoKind(v as PromoKind | typeof PROMO_NONE)}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={PROMO_NONE}>No promo (standard APR)</SelectItem>
+                    <SelectItem value="purchase">Purchase intro 0%</SelectItem>
+                    <SelectItem value="balance_transfer">Balance transfer 0%</SelectItem>
+                  </SelectContent>
+                </Select>
+              </EditField>
+              {promoKind !== PROMO_NONE && (
+                <EditField label="0% ends" span={promoKind !== "balance_transfer"}>
+                  <Input type="date" value={promoUntil} onChange={(e) => setPromoUntil(e.target.value)} className="h-8 text-sm" />
+                </EditField>
+              )}
+              {promoKind === "balance_transfer" && (
+                <EditField label="Transfer date">
+                  <Input type="date" value={btDate} onChange={(e) => setBtDate(e.target.value)} className="h-8 text-sm" />
+                </EditField>
+              )}
+            </>
+          )}
         </div>
+
+        {debtClass === "revolving" && promoKind !== PROMO_NONE && (
+          <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
+            While the promo is live this card sits in <span className="text-success">Deferred · 0%</span> and its
+            payment auto-fills to the minimum. It moves to <span className="text-foreground">Monthly</span> when the
+            0% ends.
+          </p>
+        )}
 
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={() => setOpen(false)} className="text-muted-foreground">Cancel</Button>

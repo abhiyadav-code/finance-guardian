@@ -109,7 +109,8 @@ function mapConfidence(level) {
 }
 
 function mapAccountType(a) {
-  if (a.type === "credit" || a.type === "loan") return "credit";
+  if (a.type === "credit") return "credit";
+  if (a.type === "loan") return "loan"; // installment debt → Loans page
   if (a.type === "investment" || a.type === "brokerage") return "investment";
   if (a.type === "depository") {
     const s = (a.subtype || "").toLowerCase();
@@ -118,11 +119,13 @@ function mapAccountType(a) {
   return "checking";
 }
 
+const isOwedType = (type) => type === "credit" || type === "loan";
+
 function mapAccount(a, itemId, institutionName) {
   const type = mapAccountType(a);
   const current = a.balances?.current ?? a.balances?.available ?? 0;
   // App convention: credit/loan balances are stored negative (amount owed).
-  const balance = type === "credit" ? -Math.abs(current) : current;
+  const balance = isOwedType(type) ? -Math.abs(current) : current;
   return {
     id: a.account_id,
     name: a.name || a.official_name || "Account",
@@ -205,8 +208,9 @@ export async function createLinkToken() {
     language: "en",
     country_codes: ["US"],
     products: [Products.Transactions],
-    // Pull investments too, but only at institutions that support them.
-    required_if_supported_products: [Products.Investments],
+    // Pull investments + liabilities too, but only where the institution supports
+    // them (so linking never fails at banks that don't).
+    required_if_supported_products: [Products.Investments, Products.Liabilities],
     ...(process.env.PLAID_WEBHOOK ? { webhook: process.env.PLAID_WEBHOOK } : {}),
   });
   return resp.data.link_token;
@@ -258,8 +262,17 @@ async function syncItem(item) {
   // 1) Accounts + balances
   const acctResp = await c.accountsGet({ access_token: accessToken });
   for (const a of acctResp.data.accounts) {
-    store.upsertAccount(mapAccount(a, item.item_id, institutionName));
+    const mapped = mapAccount(a, item.item_id, institutionName);
+    store.upsertAccount(mapped);
     accountsAdded++;
+    // Tag debt accounts: classify revolving vs installment, and pull the credit
+    // limit for utilization (if the institution exposes it here).
+    if (isOwedType(mapped.type)) {
+      store.updateLiabilityFromPlaid(mapped.id, {
+        debtClass: mapped.type === "credit" ? "revolving" : "installment",
+        creditLimit: a.balances?.limit ?? null,
+      });
+    }
   }
 
   // 2) Transactions (incremental via cursor). Right after linking, Plaid may not
@@ -322,6 +335,17 @@ async function syncItem(item) {
     }
   }
 
+  // 5) Liabilities: statement balance, minimum due, due date, APR, credit limit.
+  // Only where the institution/consent supports it; user overrides are preserved.
+  try {
+    await syncLiabilitiesData(accessToken);
+  } catch (e) {
+    const code = e?.response?.data?.error_code;
+    if (code !== "PRODUCTS_NOT_SUPPORTED" && code !== "NO_LIABILITY_ACCOUNTS" && code !== "PRODUCT_NOT_READY") {
+      console.warn("[plaid] liabilities sync skipped:", code || e?.message);
+    }
+  }
+
   store.setItemSynced(item.item_id);
   return {
     accounts: accountsAdded, transactionsAdded: txAdded, transactionsRemoved: txRemoved,
@@ -367,6 +391,52 @@ async function syncRecurring(accessToken, itemId) {
   return { income, bills };
 }
 
+// Pull Plaid Liabilities (credit cards + loans) and populate the debt fields the
+// Liabilities/Loans pages use. Respects user overrides (updateLiabilityFromPlaid).
+const dayOfMonth = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.getUTCDate();
+};
+
+// Pick the representative APR for a card: prefer the purchase APR, else the
+// highest rate present. Plaid gives whole-percent numbers (e.g. 20.74).
+function pickApr(aprs = []) {
+  if (!aprs.length) return null;
+  const purchase = aprs.find((a) => a.apr_type === "purchase_apr");
+  const chosen = purchase ?? aprs.reduce((m, a) => (a.apr_percentage > (m?.apr_percentage ?? -1) ? a : m), null);
+  return chosen?.apr_percentage != null ? chosen.apr_percentage / 100 : null;
+}
+
+async function syncLiabilitiesData(accessToken) {
+  const resp = await client().liabilitiesGet({ access_token: accessToken });
+  const accounts = resp.data.accounts || [];
+  const limitFor = (id) => accounts.find((a) => a.account_id === id)?.balances?.limit ?? null;
+  const { credit = [], mortgage = [], student = [] } = resp.data.liabilities || {};
+
+  for (const c of credit) {
+    store.updateLiabilityFromPlaid(c.account_id, {
+      debtClass: "revolving",
+      statementBalance: c.last_statement_balance ?? null,
+      minDue: c.minimum_payment_amount ?? null,
+      dueDay: dayOfMonth(c.next_payment_due_date),
+      apr: pickApr(c.aprs),
+      creditLimit: limitFor(c.account_id),
+    });
+  }
+
+  const mapLoan = (l) => {
+    store.updateLiabilityFromPlaid(l.account_id, {
+      debtClass: "installment",
+      minDue: l.next_monthly_payment ?? l.minimum_payment_amount ?? null,
+      dueDay: dayOfMonth(l.next_payment_due_date ?? l.next_monthly_payment_due_date),
+      apr: l.interest_rate?.percentage != null ? l.interest_rate.percentage / 100 : null,
+    });
+  };
+  for (const m of mortgage) mapLoan(m);
+  for (const s of student) mapLoan(s);
+}
+
 // Auto-generate discretionary budget baselines from trailing-90-day spend
 // (PRD §4.4). Only fills categories the user hasn't set a budget for.
 const BUDGET_CATEGORIES = new Set([
@@ -397,7 +467,7 @@ export async function sandboxQuickAdd(institutionId = "ins_109508") {
   if (PLAID_ENV !== "sandbox") throw new Error("sandbox-only helper");
   const pt = await client().sandboxPublicTokenCreate({
     institution_id: institutionId,
-    initial_products: [Products.Transactions],
+    initial_products: [Products.Transactions, Products.Liabilities],
   });
   return exchangePublicToken(pt.data.public_token, { institution_id: institutionId });
 }

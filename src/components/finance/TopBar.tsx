@@ -37,6 +37,7 @@ export function TopBar() {
           <NavLink to="/" end className="hover:text-foreground" activeClassName="text-foreground">Dashboard</NavLink>
           <NavLink to="/cash-flow" className="hover:text-foreground" activeClassName="text-foreground">Cash flow</NavLink>
           <NavLink to="/liabilities" className="hover:text-foreground" activeClassName="text-foreground">Liabilities</NavLink>
+          <NavLink to="/loans" className="hover:text-foreground" activeClassName="text-foreground">Loans</NavLink>
           <NavLink to="/transactions" className="hover:text-foreground" activeClassName="text-foreground">Transactions</NavLink>
         </nav>
 

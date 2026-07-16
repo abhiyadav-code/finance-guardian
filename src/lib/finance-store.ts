@@ -28,7 +28,8 @@ export type LiabilityPatch = Partial<
     Account,
     | "owner" | "apr" | "creditLimit" | "statementBalance" | "balance"
     | "minDue" | "dueDay" | "autopay" | "liabilityGroup" | "notes"
-    | "payment" | "payStatus"
+    | "payment" | "payStatus" | "debtClass"
+    | "promoKind" | "promoAprUntil" | "balanceTransferDate"
   >
 >;
 

@@ -115,6 +115,14 @@ addColumnIfMissing("accounts", "notes", "notes TEXT");
 addColumnIfMissing("accounts", "payment", "payment REAL");
 addColumnIfMissing("accounts", "pay_status", "pay_status TEXT");
 addColumnIfMissing("accounts", "is_funding", "is_funding INTEGER NOT NULL DEFAULT 0");
+// revolving (credit cards → Liabilities page) vs installment (loans → Loans page)
+addColumnIfMissing("accounts", "debt_class", "debt_class TEXT");
+// 0%-APR promo tracking
+addColumnIfMissing("accounts", "promo_kind", "promo_kind TEXT");            // 'purchase' | 'balance_transfer'
+addColumnIfMissing("accounts", "promo_apr_until", "promo_apr_until TEXT");  // ISO date the 0% ends
+addColumnIfMissing("accounts", "balance_transfer_date", "balance_transfer_date TEXT");
+// comma-separated list of liability fields the user has set by hand (Plaid won't clobber these)
+addColumnIfMissing("accounts", "liability_overrides", "liability_overrides TEXT");
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
 // Categories are app config, not sample financial data, so this runs regardless
@@ -141,8 +149,9 @@ function seedIfEmpty() {
   const insAccount = db.prepare(
     `INSERT INTO accounts
        (id, name, balance, type, mask, institution, is_funding,
-        owner, apr, credit_limit, statement_balance, min_due, due_day, autopay, liability_group, notes, payment, pay_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        owner, apr, credit_limit, statement_balance, min_due, due_day, autopay, notes, payment, pay_status,
+        debt_class, promo_kind, promo_apr_until, balance_transfer_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)`
   );
   const insTx = db.prepare(
     `INSERT INTO transactions (id, date, merchant, amount, category, account, flagged, confidence, essential, user_override)
@@ -164,7 +173,8 @@ function seedIfEmpty() {
         a.owner ?? null, a.apr ?? null, a.creditLimit ?? null, a.statementBalance ?? null,
         a.minDue ?? null, a.dueDay ?? null,
         a.autopay === undefined ? null : (a.autopay ? 1 : 0),
-        a.liabilityGroup ?? null, a.notes ?? null, a.payment ?? null, a.payStatus ?? null
+        a.notes ?? null, a.payment ?? null, a.payStatus ?? null,
+        a.debtClass ?? null, a.promoKind ?? null, a.promoAprUntil ?? null, a.balanceTransferDate ?? null
       );
     // Freeze the starting funding-account balance for the payment cycle.
     const funding = seedAccounts.find((a) => a.isFunding);
@@ -200,6 +210,10 @@ const toAccount = (r) => ({
   notes: r.notes ?? null,
   payment: r.payment ?? null,
   payStatus: r.pay_status ?? null,
+  debtClass: r.debt_class ?? null,
+  promoKind: r.promo_kind ?? null,
+  promoAprUntil: r.promo_apr_until ?? null,
+  balanceTransferDate: r.balance_transfer_date ?? null,
 });
 const toTransaction = (r) => ({
   id: r.id, date: r.date, merchant: r.merchant, amount: r.amount, category: r.category,
@@ -301,18 +315,65 @@ const LIABILITY_COLUMNS = {
   notes: "notes",
   payment: "payment",
   payStatus: "pay_status",
+  debtClass: "debt_class",
+  promoKind: "promo_kind",
+  promoAprUntil: "promo_apr_until",
+  balanceTransferDate: "balance_transfer_date",
 };
 
-// Update one or more liability fields on an account. Booleans (autopay) are
-// coerced to 0/1; unknown keys are ignored.
+// Fields Plaid can supply — once the user edits one it's "locked" so a future
+// Plaid sync won't overwrite their manual value.
+const PLAID_TRACKED = new Set([
+  "apr", "creditLimit", "statementBalance", "minDue", "dueDay",
+]);
+
+const readOverrides = (id) => {
+  const r = db.prepare("SELECT liability_overrides FROM accounts WHERE id = ?").get(id);
+  return new Set((r?.liability_overrides || "").split(",").filter(Boolean));
+};
+
+// Update one or more liability fields on an account (user edit). Booleans are
+// coerced to 0/1; unknown keys ignored. Edited Plaid-sourced fields are recorded
+// as overrides so syncs leave them alone.
 export function updateLiability(id, patch = {}) {
   const sets = [];
   const vals = [];
+  const overrides = readOverrides(id);
   for (const [key, col] of Object.entries(LIABILITY_COLUMNS)) {
     if (!(key in patch)) continue;
     let v = patch[key];
     if (key === "autopay") v = v === null ? null : v ? 1 : 0;
     sets.push(`${col} = ?`);
+    vals.push(v);
+    if (PLAID_TRACKED.has(key)) overrides.add(key);
+  }
+  if (!sets.length) return false;
+  sets.push("liability_overrides = ?");
+  vals.push([...overrides].join(","));
+  vals.push(id);
+  const r = db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  return r.changes > 0;
+}
+
+// Populate liability fields FROM Plaid on sync. Only sets fields the user hasn't
+// manually overridden, and only non-null incoming values. Also sets debt_class
+// if not already set. Never touches payment/status/notes/promo (user-owned).
+export function updateLiabilityFromPlaid(id, fields = {}) {
+  const overrides = readOverrides(id);
+  const sets = [];
+  const vals = [];
+  for (const [key, col] of Object.entries(LIABILITY_COLUMNS)) {
+    if (!(key in fields)) continue;
+    if (!PLAID_TRACKED.has(key) && key !== "debtClass") continue; // only Plaid-owned facts
+    if (overrides.has(key)) continue;                             // user set it by hand
+    const v = fields[key];
+    if (v === null || v === undefined) continue;
+    if (key === "debtClass") {
+      // only set debt_class if not already classified
+      sets.push("debt_class = COALESCE(debt_class, ?)");
+    } else {
+      sets.push(`${col} = ?`);
+    }
     vals.push(v);
   }
   if (!sets.length) return false;

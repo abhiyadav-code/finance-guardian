@@ -126,25 +126,42 @@ export const LIABILITY_TYPES = new Set(["credit", "loan"]);
 
 export const LIABILITY_GROUP_ORDER: LiabilityGroup[] = ["monthly", "deferred", "zero"];
 export const LIABILITY_GROUP_LABEL: Record<LiabilityGroup, string> = {
-  monthly: "Monthly",
-  deferred: "Long-term / deferred",
+  monthly: "Monthly · standard APR",
+  deferred: "Deferred · 0% promo",
   zero: "Zero balance",
 };
 
 export const isLiability = (a: Account) => LIABILITY_TYPES.has(a.type);
 
+/** revolving (credit cards → Liabilities) vs installment (loans → Loans page) */
+export const debtClassOf = (a: Account) =>
+  a.debtClass ?? (a.type === "loan" ? "installment" : "revolving");
+
+export const isRevolving = (a: Account) => isLiability(a) && debtClassOf(a) === "revolving";
+export const isInstallment = (a: Account) => isLiability(a) && debtClassOf(a) === "installment";
+
 /** Amount currently owed on an account (credit/loan balances are stored negative). */
 export const owedOf = (a: Account) => Math.max(0, -a.balance);
+
+/** A 0%-APR promo that hasn't expired yet. */
+export const isPromoActive = (a: Account) =>
+  !!a.promoAprUntil && new Date(a.promoAprUntil).getTime() > Date.now();
+
+/** Effective APR right now (0 while a promo is live, else the go-to rate). */
+export const effectiveApr = (a: Account) => (isPromoActive(a) ? 0 : a.apr ?? 0);
 
 export type LiabilityRow = {
   account: Account;
   owed: number;
   payment: number;
+  paymentAuto: boolean;         // payment was auto-filled to the minimum (0% promo)
   nextMonthOwed: number;
   statement: number;
   minDue: number;
   utilization: number | null;   // owed / limit
-  estInterest: number;          // owed * apr / 12 (approx; promo periods will overstate)
+  effectiveApr: number;
+  promoActive: boolean;
+  estInterest: number;          // owed * effectiveApr / 12
 };
 
 export type LiabilityGroupView = {
@@ -176,29 +193,40 @@ export type LiabilitiesView = {
   overAllocated: boolean;
 };
 
+// Bucket is auto-derived: nothing owed → zero; live 0% promo → deferred;
+// otherwise a standard-APR balance we pay down → monthly.
 function groupOf(a: Account): LiabilityGroup {
-  if (a.liabilityGroup) return a.liabilityGroup;
-  return owedOf(a) > 0 ? "monthly" : "zero"; // sensible fallback for un-tagged debts
+  if (owedOf(a) <= 0) return "zero";
+  if (isPromoActive(a)) return "deferred";
+  return "monthly";
 }
 
 export function deriveLiabilities(
   accounts: Account[],
   fundingSnapshot: number | null
 ): LiabilitiesView {
-  const liabilities = accounts.filter(isLiability);
+  const liabilities = accounts.filter(isRevolving);
 
   const toRow = (a: Account): LiabilityRow => {
     const owed = owedOf(a);
-    const payment = Math.max(0, a.payment ?? 0);
+    const minDue = a.minDue ?? 0;
+    const promoActive = isPromoActive(a);
+    // Auto-fill the minimum on 0% promo cards when no payment is set.
+    const paymentAuto = a.payment == null && promoActive && minDue > 0;
+    const payment = paymentAuto ? minDue : Math.max(0, a.payment ?? 0);
+    const eApr = effectiveApr(a);
     return {
       account: a,
       owed,
       payment,
+      paymentAuto,
       nextMonthOwed: Math.max(0, owed - payment),
       statement: a.statementBalance ?? 0,
-      minDue: a.minDue ?? 0,
+      minDue,
       utilization: a.creditLimit && a.creditLimit > 0 ? owed / a.creditLimit : null,
-      estInterest: a.apr && a.apr > 0 ? (owed * a.apr) / 12 : 0,
+      effectiveApr: eApr,
+      promoActive,
+      estInterest: eApr > 0 ? (owed * eApr) / 12 : 0,
     };
   };
 
@@ -243,5 +271,49 @@ export function deriveLiabilities(
     remaining,
     pctAllocated: snapshot > 0 ? allocated / snapshot : 0,
     overAllocated: allocated > snapshot,
+  };
+}
+
+// ----- Installment loans (mortgage / auto / student) — the Loans page -----
+
+export type LoanRow = {
+  account: Account;
+  balance: number;       // outstanding principal owed
+  apr: number;
+  monthlyPayment: number;
+  payoffMonths: number | null; // rough months to payoff at current payment
+};
+
+export type LoansView = {
+  loans: LoanRow[];
+  totalBalance: number;
+  totalMonthly: number;
+  hasLoans: boolean;
+};
+
+// Rough amortization: months to pay off `balance` at fixed `payment` and monthly
+// rate r. Null when the payment can't cover interest (never pays off).
+function payoffMonths(balance: number, apr: number, payment: number): number | null {
+  if (balance <= 0) return 0;
+  if (payment <= 0) return null;
+  const r = apr / 12;
+  if (r <= 0) return Math.ceil(balance / payment);
+  if (payment <= balance * r) return null; // payment doesn't cover interest
+  const n = -Math.log(1 - (r * balance) / payment) / Math.log(1 + r);
+  return Math.ceil(n);
+}
+
+export function deriveLoans(accounts: Account[]): LoansView {
+  const loans: LoanRow[] = accounts.filter(isInstallment).map((a) => {
+    const balance = owedOf(a);
+    const apr = a.apr ?? 0;
+    const monthlyPayment = Math.max(0, a.payment ?? a.minDue ?? 0);
+    return { account: a, balance, apr, monthlyPayment, payoffMonths: payoffMonths(balance, apr, monthlyPayment) };
+  });
+  return {
+    loans,
+    totalBalance: loans.reduce((s, l) => s + l.balance, 0),
+    totalMonthly: loans.reduce((s, l) => s + l.monthlyPayment, 0),
+    hasLoans: loans.length > 0,
   };
 }

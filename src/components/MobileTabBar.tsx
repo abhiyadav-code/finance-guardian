@@ -1,11 +1,12 @@
-import { LayoutDashboard, LineChart, Scale, ReceiptText } from "lucide-react";
+import { LayoutDashboard, LineChart, CreditCard, Banknote, ReceiptText } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 
 const tabs = [
-  { to: "/",             label: "Dashboard",    Icon: LayoutDashboard, end: true },
+  { to: "/",             label: "Home",         Icon: LayoutDashboard, end: true },
   { to: "/cash-flow",    label: "Cash flow",    Icon: LineChart },
-  { to: "/liabilities",  label: "Liabilities",  Icon: Scale },
-  { to: "/transactions", label: "Transactions", Icon: ReceiptText },
+  { to: "/liabilities",  label: "Liabilities",  Icon: CreditCard },
+  { to: "/loans",        label: "Loans",        Icon: Banknote },
+  { to: "/transactions", label: "Activity",     Icon: ReceiptText },
 ] as const;
 
 /**
@@ -26,7 +27,7 @@ export function MobileTabBar() {
             <NavLink
               to={to}
               end={end}
-              className="flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium text-muted-foreground transition-colors"
+              className="flex flex-col items-center gap-1 py-2.5 text-[9px] font-medium whitespace-nowrap text-muted-foreground transition-colors"
               activeClassName="text-primary"
             >
               <Icon className="h-5 w-5" strokeWidth={2} />

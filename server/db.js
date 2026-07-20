@@ -126,6 +126,9 @@ addColumnIfMissing("accounts", "liability_overrides", "liability_overrides TEXT"
 // raw Plaid subtype (mortgage, auto, money market, cd, …) — kept for correct
 // classification and transparency about why an account is typed the way it is.
 addColumnIfMissing("accounts", "subtype", "subtype TEXT");
+// set when the user manually reclassifies an account's type (e.g. a brokerage
+// CMA that Plaid reports as depository). Locks the type against Plaid syncs.
+addColumnIfMissing("accounts", "type_override", "type_override INTEGER NOT NULL DEFAULT 0");
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
 // Categories are app config, not sample financial data, so this runs regardless
@@ -466,10 +469,20 @@ export function upsertAccount(a) {
     `INSERT INTO accounts (id, name, balance, type, mask, institution, item_id, subtype)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       name = excluded.name, balance = excluded.balance, type = excluded.type,
+       name = excluded.name, balance = excluded.balance,
+       -- keep the user's manual type if they reclassified this account
+       type = CASE WHEN accounts.type_override = 1 THEN accounts.type ELSE excluded.type END,
        mask = excluded.mask, institution = excluded.institution, item_id = excluded.item_id,
        subtype = excluded.subtype`
   ).run(a.id, a.name, a.balance, a.type, a.mask ?? null, a.institution ?? null, a.itemId ?? null, a.subtype ?? null);
+}
+
+const ACCOUNT_TYPES = new Set(["checking", "savings", "investment", "credit", "loan"]);
+// Manually reclassify an account's type (locks it against Plaid syncs).
+export function setAccountType(id, type) {
+  if (!ACCOUNT_TYPES.has(type)) throw new Error(`invalid account type: ${type}`);
+  const r = db.prepare("UPDATE accounts SET type = ?, type_override = 1 WHERE id = ?").run(type, id);
+  return r.changes > 0;
 }
 
 export function upsertTransaction(t) {

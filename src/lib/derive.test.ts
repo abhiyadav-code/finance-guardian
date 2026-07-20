@@ -46,6 +46,19 @@ describe("cash / liquid assets", () => {
     expect(withoutInvestments.liquidAssets).toBeCloseTo(CASH_SUM, 2);
   });
 
+  it("a brokerage CMA mis-typed as checking inflates cash; reclassifying to investment fixes it", () => {
+    // The real bug: a Merrill CMA-Edge account Plaid reports as depository.
+    const cmaAsChecking = acct({ id: "cma", type: "checking", balance: 95_700.84 });
+    const inflated = deriveSummary([...HOUSEHOLD, cmaAsChecking], []);
+    expect(inflated.liquidAssets).toBeCloseTo(CASH_SUM + 95_700.84, 2);
+
+    // After reclassifying it to investment, cash returns to the true figure
+    // and net worth is unchanged (it's still an asset).
+    const fixed = deriveSummary([...HOUSEHOLD, { ...cmaAsChecking, type: "investment" }], []);
+    expect(fixed.liquidAssets).toBeCloseTo(CASH_SUM, 2);
+    expect(fixed.netWorth).toBeCloseTo(inflated.netWorth, 2);
+  });
+
   it("does NOT double-count when the same account id appears twice", () => {
     // Simulate a bad merge / optimistic-insert repeat.
     const dupey = [...HOUSEHOLD, { ...CHECKING_B }, { ...SAVINGS }];

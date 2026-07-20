@@ -108,6 +108,18 @@ api.post("/liabilities/snapshot", wrap((req, res) => {
   res.json({ fundingSnapshot: store.setFundingSnapshot(typeof value === "number" ? value : undefined) });
 }));
 
+// Manually reclassify an account's type (e.g. a brokerage CMA Plaid calls cash).
+api.post("/accounts/:id/type", wrap((req, res) => {
+  const { type } = req.body ?? {};
+  if (!type) return res.status(400).json({ error: "type required" });
+  try {
+    if (!store.setAccountType(req.params.id, type)) return res.status(404).json({ error: "account not found" });
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "invalid type" });
+  }
+  ok(res);
+}));
+
 // Choose which cash account funds the payments.
 api.post("/liabilities/funding", wrap((req, res) => {
   const { accountId } = req.body ?? {};

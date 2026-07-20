@@ -61,6 +61,8 @@ type State = {
   setFundingSnapshot: (value?: number) => void;
   /** choose which cash account funds the payments (snapshots its balance) */
   setFundingAccount: (accountId: string) => void;
+  /** manually reclassify an account's type (persists across syncs) */
+  setAccountType: (id: string, type: Account["type"]) => void;
 };
 
 const initialBudgets = Object.fromEntries(
@@ -172,6 +174,10 @@ export const useFinanceStore = create<State>((set, get) => ({
       };
     });
     persist(api.setFundingAccount(accountId), "setFundingAccount");
+  },
+  setAccountType: (id, type) => {
+    set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, type } : a)) }));
+    persist(api.setAccountType(id, type), "setAccountType");
   },
 }));
 

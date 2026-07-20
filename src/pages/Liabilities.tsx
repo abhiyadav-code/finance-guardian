@@ -99,24 +99,42 @@ const Liabilities = () => {
 function AllocationPanel({
   view, onResnapshot,
 }: { view: ReturnType<typeof deriveLiabilities>; onResnapshot: () => void }) {
+  const accounts = useFinanceStore((s) => s.accounts);
+  const setFundingAccount = useFinanceStore((s) => s.setFundingAccount);
+  const cashAccounts = accounts.filter((a) => a.type === "checking" || a.type === "savings");
   const clampPct = Math.min(100, Math.max(0, view.pctAllocated * 100));
   return (
     <section className="panel mt-6 p-6 md:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Paying from</p>
-          <h2 className="font-display mt-1 flex items-center gap-2 text-2xl">
-            <Landmark className="h-5 w-5 text-muted-foreground" />
-            {view.fundingAccount?.name ?? "Checking"}
-            {view.fundingAccount?.mask && (
-              <span className="text-sm font-normal text-muted-foreground">{view.fundingAccount.mask}</span>
+          <div className="mt-1 flex items-center gap-2">
+            <Landmark className="h-5 w-5 shrink-0 text-muted-foreground" />
+            {cashAccounts.length > 0 ? (
+              <Select
+                value={view.fundingAccount?.id ?? ""}
+                onValueChange={(id) => setFundingAccount(id)}
+              >
+                <SelectTrigger className="h-9 w-auto gap-2 border-none bg-transparent px-1 font-display text-2xl focus:ring-0">
+                  <SelectValue placeholder="Choose account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cashAccounts.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name} <span className="text-muted-foreground">{a.mask} · {fmtCents(a.balance)}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <h2 className="font-display text-2xl">Checking</h2>
             )}
-          </h2>
+          </div>
         </div>
         <button
           onClick={onResnapshot}
           className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          title="Freeze the current checking balance as the starting point for this cycle"
+          title="Re-freeze the funding account's current balance as this cycle's starting point"
         >
           <RefreshCw className="h-3.5 w-3.5" /> Refresh snapshot
         </button>

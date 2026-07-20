@@ -10,6 +10,15 @@ const NON_SPEND = new Set<Category>(["Income", "Transfer"]);
 const isSpend = (t: Transaction) => t.amount < 0 && !NON_SPEND.has(t.category);
 const daysAgo = (iso: string) => (Date.now() - new Date(iso).getTime()) / 86_400_000;
 
+// Collapse accounts to one row per id. A single account must never be summed
+// twice (e.g. if hydrate + an optimistic insert both added it, or a bad merge
+// produced a repeat), so every money total starts from a de-duplicated list.
+export function dedupeAccounts(accounts: Account[]): Account[] {
+  const byId = new Map<string, Account>();
+  for (const a of accounts) byId.set(a.id, a);
+  return [...byId.values()];
+}
+
 export type Summary = {
   netWorth: number;
   liquidAssets: number;
@@ -23,7 +32,8 @@ export type Summary = {
   hasData: boolean;
 };
 
-export function deriveSummary(accounts: Account[], transactions: Transaction[]): Summary {
+export function deriveSummary(accountsRaw: Account[], transactions: Transaction[]): Summary {
+  const accounts = dedupeAccounts(accountsRaw);
   const netWorth = accounts.reduce((s, a) => s + a.balance, 0);
   const liquidAssets = accounts
     .filter((a) => LIQUID_TYPES.has(a.type))
@@ -202,9 +212,10 @@ function groupOf(a: Account): LiabilityGroup {
 }
 
 export function deriveLiabilities(
-  accounts: Account[],
+  accountsRaw: Account[],
   fundingSnapshot: number | null
 ): LiabilitiesView {
+  const accounts = dedupeAccounts(accountsRaw);
   const liabilities = accounts.filter(isRevolving);
 
   const toRow = (a: Account): LiabilityRow => {
@@ -303,7 +314,8 @@ function payoffMonths(balance: number, apr: number, payment: number): number | n
   return Math.ceil(n);
 }
 
-export function deriveLoans(accounts: Account[]): LoansView {
+export function deriveLoans(accountsRaw: Account[]): LoansView {
+  const accounts = dedupeAccounts(accountsRaw);
   const loans: LoanRow[] = accounts.filter(isInstallment).map((a) => {
     const balance = owedOf(a);
     const apr = a.apr ?? 0;

@@ -109,12 +109,12 @@ function mapConfidence(level) {
 }
 
 function mapAccountType(a) {
+  const sub = (a.subtype || "").toLowerCase();
   if (a.type === "credit") return "credit";
   if (a.type === "loan") return "loan"; // installment debt → Loans page
   if (a.type === "investment" || a.type === "brokerage") return "investment";
   if (a.type === "depository") {
-    const s = (a.subtype || "").toLowerCase();
-    return s === "savings" || s === "cd" || s === "money market" || s === "hsa" ? "savings" : "checking";
+    return sub === "savings" || sub === "cd" || sub === "money market" || sub === "hsa" ? "savings" : "checking";
   }
   return "checking";
 }
@@ -131,6 +131,7 @@ function mapAccount(a, itemId, institutionName) {
     name: a.name || a.official_name || "Account",
     balance,
     type,
+    subtype: a.subtype || null,
     mask: a.mask ? `··${a.mask}` : null,
     institution: institutionName,
     itemId,

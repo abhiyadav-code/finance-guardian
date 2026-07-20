@@ -59,6 +59,8 @@ type State = {
   updateLiability: (id: string, patch: LiabilityPatch) => void;
   /** freeze the checking snapshot; omit value to capture the live balance */
   setFundingSnapshot: (value?: number) => void;
+  /** choose which cash account funds the payments (snapshots its balance) */
+  setFundingAccount: (accountId: string) => void;
 };
 
 const initialBudgets = Object.fromEntries(
@@ -159,6 +161,17 @@ export const useFinanceStore = create<State>((set, get) => ({
       return { fundingSnapshot: next };
     });
     persist(api.setFundingSnapshot(value), "setFundingSnapshot");
+  },
+  setFundingAccount: (accountId) => {
+    set((s) => {
+      const chosen = s.accounts.find((a) => a.id === accountId);
+      if (!chosen) return {};
+      return {
+        accounts: s.accounts.map((a) => ({ ...a, isFunding: a.id === accountId })),
+        fundingSnapshot: chosen.balance,
+      };
+    });
+    persist(api.setFundingAccount(accountId), "setFundingAccount");
   },
 }));
 

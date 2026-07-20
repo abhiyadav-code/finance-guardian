@@ -35,6 +35,8 @@ export type Account = {
   name: string;
   balance: number;
   type: AccountType;
+  /** raw Plaid subtype (mortgage, auto, money market, …), for transparency */
+  subtype?: string | null;
   mask: string;
   institution?: string | null;
   /** the checking account payments are drawn from (only one) */

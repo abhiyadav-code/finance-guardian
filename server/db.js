@@ -123,6 +123,9 @@ addColumnIfMissing("accounts", "promo_apr_until", "promo_apr_until TEXT");  // I
 addColumnIfMissing("accounts", "balance_transfer_date", "balance_transfer_date TEXT");
 // comma-separated list of liability fields the user has set by hand (Plaid won't clobber these)
 addColumnIfMissing("accounts", "liability_overrides", "liability_overrides TEXT");
+// raw Plaid subtype (mortgage, auto, money market, cd, …) — kept for correct
+// classification and transparency about why an account is typed the way it is.
+addColumnIfMissing("accounts", "subtype", "subtype TEXT");
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
 // Categories are app config, not sample financial data, so this runs regardless
@@ -197,6 +200,7 @@ seedIfEmpty();
 // ----- Row -> API shape mappers (match the frontend's Zustand store types) -----
 const toAccount = (r) => ({
   id: r.id, name: r.name, balance: r.balance, type: r.type, mask: r.mask,
+  subtype: r.subtype ?? null,
   institution: r.institution ?? null,
   isFunding: !!r.is_funding,
   owner: r.owner ?? null,
@@ -382,6 +386,26 @@ export function updateLiabilityFromPlaid(id, fields = {}) {
   return r.changes > 0;
 }
 
+// Choose which cash account payments are drawn from. Clears the flag elsewhere,
+// sets it on `id`, and snapshots that account's balance.
+export function setFundingAccount(id) {
+  const acct = db.prepare("SELECT balance FROM accounts WHERE id = ?").get(id);
+  if (!acct) return false;
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE accounts SET is_funding = 0").run();
+    db.prepare("UPDATE accounts SET is_funding = 1 WHERE id = ?").run(id);
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('funding_snapshot', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ).run(String(acct.balance));
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return true;
+}
+
 // Freeze (or refresh) the checking snapshot the payment allocation draws from.
 // With no explicit value, capture the current funding account's balance.
 export function setFundingSnapshot(value) {
@@ -439,12 +463,13 @@ export function deletePlaidItem(itemId) {
 
 export function upsertAccount(a) {
   db.prepare(
-    `INSERT INTO accounts (id, name, balance, type, mask, institution, item_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO accounts (id, name, balance, type, mask, institution, item_id, subtype)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, balance = excluded.balance, type = excluded.type,
-       mask = excluded.mask, institution = excluded.institution, item_id = excluded.item_id`
-  ).run(a.id, a.name, a.balance, a.type, a.mask ?? null, a.institution ?? null, a.itemId ?? null);
+       mask = excluded.mask, institution = excluded.institution, item_id = excluded.item_id,
+       subtype = excluded.subtype`
+  ).run(a.id, a.name, a.balance, a.type, a.mask ?? null, a.institution ?? null, a.itemId ?? null, a.subtype ?? null);
 }
 
 export function upsertTransaction(t) {

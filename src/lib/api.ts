@@ -60,6 +60,7 @@ export type Api = {
   setIncomeAmount: (id: string, amount: number) => Promise<unknown>;
   updateLiability: (id: string, patch: LiabilityPatch) => Promise<unknown>;
   setFundingSnapshot: (value?: number) => Promise<{ fundingSnapshot: number }>;
+  setFundingAccount: (accountId: string) => Promise<unknown>;
   config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string } }>;
   plaidStatus: () => Promise<{ configured: boolean; env: string }>;
   plaidLinkToken: () => Promise<{ link_token: string }>;
@@ -84,6 +85,7 @@ const liveApi: Api = {
     req("POST", `/income/${id}/amount`, { amount }),
   updateLiability: (id, patch) => req("PATCH", `/accounts/${id}/liability`, patch),
   setFundingSnapshot: (value) => req("POST", "/liabilities/snapshot", { value }),
+  setFundingAccount: (accountId) => req("POST", "/liabilities/funding", { accountId }),
 
   config: () => req("GET", "/config"),
 
@@ -122,6 +124,7 @@ const demoApi: Api = {
   setIncomeAmount: async () => ({ ok: true }),
   updateLiability: async () => ({ ok: true }),
   setFundingSnapshot: async (value) => ({ fundingSnapshot: value ?? 0 }),
+  setFundingAccount: async () => ({ ok: true }),
   config: async () => ({ instance: "demo", plaid: { configured: false, env: "sandbox" } }),
   plaidStatus: async () => ({ configured: false, env: "sandbox" }),
   plaidLinkToken: async () => ({ link_token: "" }),

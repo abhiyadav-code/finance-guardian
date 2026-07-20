@@ -108,6 +108,14 @@ api.post("/liabilities/snapshot", wrap((req, res) => {
   res.json({ fundingSnapshot: store.setFundingSnapshot(typeof value === "number" ? value : undefined) });
 }));
 
+// Choose which cash account funds the payments.
+api.post("/liabilities/funding", wrap((req, res) => {
+  const { accountId } = req.body ?? {};
+  if (!accountId) return res.status(400).json({ error: "accountId required" });
+  if (!store.setFundingAccount(accountId)) return res.status(404).json({ error: "account not found" });
+  ok(res);
+}));
+
 // ----- Plaid -----
 const asyncWrap = (fn) => async (req, res) => {
   try {

@@ -15,6 +15,8 @@ import {
   ArrowLeft, Search, Sparkles, Pencil, Check, AlertTriangle, Repeat, Copy, Plus,
 } from "lucide-react";
 import { ConnectAccountDialog } from "@/components/finance/ConnectAccountDialog";
+import { CategoryManagerDialog } from "@/components/finance/CategoryManagerDialog";
+import { SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
 const flagMeta = {
@@ -33,6 +35,7 @@ const Transactions = () => {
   const [accountFilter, setAccountFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [connectOpen, setConnectOpen] = useState(false);
+  const [manageCatsOpen, setManageCatsOpen] = useState(false);
 
   const filtered = useMemo(() => {
     return transactions
@@ -73,12 +76,21 @@ const Transactions = () => {
             </p>
           </div>
 
-          <Button
-            onClick={() => setConnectOpen(true)}
-            className="bg-primary text-primary-foreground hover:bg-primary/90"
-          >
-            <Plus className="mr-1.5 h-4 w-4" /> Connect account
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setManageCatsOpen(true)}
+              className="border-border bg-background/60 text-muted-foreground hover:text-foreground"
+            >
+              <SlidersHorizontal className="mr-1.5 h-4 w-4" /> Categories
+            </Button>
+            <Button
+              onClick={() => setConnectOpen(true)}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="mr-1.5 h-4 w-4" /> Connect account
+            </Button>
+          </div>
         </div>
 
         {/* Filter bar */}
@@ -186,6 +198,7 @@ const Transactions = () => {
       </main>
 
       <ConnectAccountDialog open={connectOpen} onOpenChange={setConnectOpen} />
+      <CategoryManagerDialog open={manageCatsOpen} onOpenChange={setManageCatsOpen} />
     </div>
   );
 };

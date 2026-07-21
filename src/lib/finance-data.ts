@@ -39,6 +39,12 @@ export type Account = {
   subtype?: string | null;
   mask: string;
   institution?: string | null;
+  /** user-facing display name; the Plaid `name` is preserved underneath */
+  nickname?: string | null;
+  /** a manual (non-Plaid) account whose balance the user maintains */
+  isManual?: boolean;
+  /** ISO timestamp the (manual) balance was last set */
+  balanceAsof?: string | null;
   /** the checking account payments are drawn from (only one) */
   isFunding?: boolean;
   // ----- liability fields (carried on credit / loan accounts) -----
@@ -188,6 +194,11 @@ export const runway = {
   monthlyEssential: 7382,        // housing + utilities + groceries + childcare + transport (essentials)
   monthlyLifestyle: 2941,        // dining, shopping, travel, subscriptions, entertainment
 };
+
+// Display label for an account: the nickname if set, else the Plaid/original name.
+export function accountLabel(a: Account): string {
+  return (a.nickname && a.nickname.trim()) || a.name;
+}
 
 export function fmt(n: number, opts: Intl.NumberFormatOptions = {}) {
   return new Intl.NumberFormat("en-US", {

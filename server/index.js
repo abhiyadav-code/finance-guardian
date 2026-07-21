@@ -82,6 +82,50 @@ api.post("/categories", wrap((req, res) => {
   res.json({ name: store.addCategory(name) });
 }));
 
+api.delete("/categories/:name", wrap((req, res) => {
+  const result = store.deleteCategory(decodeURIComponent(req.params.name));
+  if (!result.deleted) return res.status(400).json({ error: result.reason });
+  res.json(result);
+}));
+
+// ----- Accounts: manual accounts + nicknames -----
+api.post("/accounts", wrap((req, res) => {
+  const { name, type, balance, nickname } = req.body ?? {};
+  if (!name || !type) return res.status(400).json({ error: "name and type required" });
+  try {
+    res.json({ id: store.createManualAccount({ name, type, balance, nickname }) });
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "invalid account" });
+  }
+}));
+
+api.patch("/accounts/:id/nickname", wrap((req, res) => {
+  if (!store.setAccountNickname(req.params.id, req.body?.nickname ?? "")) return res.status(404).json({ error: "account not found" });
+  ok(res);
+}));
+
+api.patch("/accounts/:id/balance", wrap((req, res) => {
+  const { balance } = req.body ?? {};
+  if (typeof balance !== "number") return res.status(400).json({ error: "numeric balance required" });
+  try {
+    if (!store.setManualBalance(req.params.id, balance)) return res.status(404).json({ error: "account not found" });
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "cannot set balance" });
+  }
+  ok(res);
+}));
+
+api.delete("/accounts/:id", wrap((req, res) => {
+  try {
+    if (!store.deleteManualAccount(req.params.id)) return res.status(404).json({ error: "account not found" });
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "cannot delete" });
+  }
+  ok(res);
+}));
+
+api.get("/accounts/:id/history", wrap((req, res) => res.json({ history: store.getAccountHistory(req.params.id) })));
+
 api.post("/income/:id/toggle", wrap((req, res) => {
   store.toggleIncome(req.params.id);
   ok(res);

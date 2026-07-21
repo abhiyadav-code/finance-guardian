@@ -63,6 +63,16 @@ type State = {
   setFundingAccount: (accountId: string) => void;
   /** manually reclassify an account's type (persists across syncs) */
   setAccountType: (id: string, type: Account["type"]) => void;
+  /** create a manual (non-Plaid) account; resolves with its id */
+  addManualAccount: (input: { name: string; type: Account["type"]; balance: number; nickname?: string }) => Promise<string | null>;
+  /** rename an account (nickname only; Plaid name preserved) */
+  setNickname: (id: string, nickname: string) => void;
+  /** update a manual account's balance (stamped, tracked over time) */
+  setManualBalance: (id: string, balance: number) => void;
+  /** delete a manual account */
+  removeAccount: (id: string) => void;
+  /** remove a custom category from the picklist */
+  removeCategory: (name: string) => void;
 };
 
 const initialBudgets = Object.fromEntries(
@@ -178,6 +188,42 @@ export const useFinanceStore = create<State>((set, get) => ({
   setAccountType: (id, type) => {
     set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, type } : a)) }));
     persist(api.setAccountType(id, type), "setAccountType");
+  },
+  addManualAccount: async (input) => {
+    try {
+      const { id } = await api.createAccount(input);
+      const acct: Account = {
+        id, name: input.name, nickname: input.nickname?.trim() || null,
+        balance: input.balance, type: input.type, mask: "",
+        isManual: true, institution: "Manual", balanceAsof: new Date().toISOString(),
+      };
+      set((s) => ({ accounts: [...s.accounts, acct] }));
+      return id;
+    } catch (e) {
+      console.error("[finance-store] addManualAccount failed:", e);
+      toast.error("Couldn't add account", { description: "The backend may be offline." });
+      return null;
+    }
+  },
+  setNickname: (id, nickname) => {
+    const clean = nickname.trim() || null;
+    set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, nickname: clean } : a)) }));
+    persist(api.setNickname(id, nickname), "setNickname");
+  },
+  setManualBalance: (id, balance) => {
+    const amt = Number(balance) || 0;
+    set((s) => ({
+      accounts: s.accounts.map((a) => (a.id === id ? { ...a, balance: amt, balanceAsof: new Date().toISOString() } : a)),
+    }));
+    persist(api.setManualBalance(id, amt), "setManualBalance");
+  },
+  removeAccount: (id) => {
+    set((s) => ({ accounts: s.accounts.filter((a) => a.id !== id) }));
+    persist(api.deleteAccount(id), "removeAccount");
+  },
+  removeCategory: (name) => {
+    set((s) => ({ categories: s.categories.filter((c) => c.toLowerCase() !== name.toLowerCase()) }));
+    persist(api.deleteCategory(name), "removeCategory");
   },
 }));
 

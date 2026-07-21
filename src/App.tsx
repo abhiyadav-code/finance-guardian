@@ -13,6 +13,7 @@ import Transactions from "./pages/Transactions.tsx";
 import CashFlow from "./pages/CashFlow.tsx";
 import Liabilities from "./pages/Liabilities.tsx";
 import Loans from "./pages/Loans.tsx";
+import Accounts from "./pages/Accounts.tsx";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +37,7 @@ const App = () => {
             <Route path="/cash-flow" element={<CashFlow />} />
             <Route path="/liabilities" element={<Liabilities />} />
             <Route path="/loans" element={<Loans />} />
+            <Route path="/accounts" element={<Accounts />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

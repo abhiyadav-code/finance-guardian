@@ -1,6 +1,7 @@
 // SQLite persistence layer using Node's built-in node:sqlite (no native deps).
 // A single file DB lives at server/data/finance.db — back it up by copying that file.
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,6 +130,21 @@ addColumnIfMissing("accounts", "subtype", "subtype TEXT");
 // set when the user manually reclassifies an account's type (e.g. a brokerage
 // CMA that Plaid reports as depository). Locks the type against Plaid syncs.
 addColumnIfMissing("accounts", "type_override", "type_override INTEGER NOT NULL DEFAULT 0");
+// user-facing nickname (Plaid `name` is preserved); manual (non-Plaid) accounts.
+addColumnIfMissing("accounts", "nickname", "nickname TEXT");
+addColumnIfMissing("accounts", "is_manual", "is_manual INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("accounts", "balance_asof", "balance_asof TEXT");
+
+// Balance history so manual accounts (my529, etc.) can be tracked over time.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS account_balance_history (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,
+    balance REAL NOT NULL,
+    at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_abh_account ON account_balance_history (account, at);
+`);
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
 // Categories are app config, not sample financial data, so this runs regardless
@@ -203,6 +219,9 @@ seedIfEmpty();
 // ----- Row -> API shape mappers (match the frontend's Zustand store types) -----
 const toAccount = (r) => ({
   id: r.id, name: r.name, balance: r.balance, type: r.type, mask: r.mask,
+  nickname: r.nickname ?? null,
+  isManual: !!r.is_manual,
+  balanceAsof: r.balance_asof ?? null,
   subtype: r.subtype ?? null,
   institution: r.institution ?? null,
   isFunding: !!r.is_funding,
@@ -483,6 +502,71 @@ export function setAccountType(id, type) {
   if (!ACCOUNT_TYPES.has(type)) throw new Error(`invalid account type: ${type}`);
   const r = db.prepare("UPDATE accounts SET type = ?, type_override = 1 WHERE id = ?").run(type, id);
   return r.changes > 0;
+}
+
+// Set a display nickname (Plaid `name` is preserved). Empty clears it.
+export function setAccountNickname(id, nickname) {
+  const clean = String(nickname ?? "").trim() || null;
+  const r = db.prepare("UPDATE accounts SET nickname = ? WHERE id = ?").run(clean, id);
+  return r.changes > 0;
+}
+
+function recordBalance(account, balance, at) {
+  db.prepare("INSERT INTO account_balance_history (account, balance, at) VALUES (?, ?, ?)").run(account, balance, at);
+}
+
+// Create a manual (non-Plaid) account, e.g. a 529 plan Plaid can't reach.
+export function createManualAccount({ name, type, balance = 0, nickname = null }) {
+  if (!ACCOUNT_TYPES.has(type)) throw new Error(`invalid account type: ${type}`);
+  const id = `man_${randomUUID()}`;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO accounts (id, name, balance, type, mask, institution, is_manual, nickname, balance_asof)
+     VALUES (?, ?, ?, ?, NULL, 'Manual', 1, ?, ?)`
+  ).run(id, String(name || "Account"), Number(balance) || 0, type, nickname ? String(nickname).trim() : null, now);
+  recordBalance(id, Number(balance) || 0, now);
+  return id;
+}
+
+// Update a manual account's balance and stamp/record it (for tracking over time).
+export function setManualBalance(id, balance) {
+  const row = db.prepare("SELECT is_manual FROM accounts WHERE id = ?").get(id);
+  if (!row) return false;
+  if (!row.is_manual) throw new Error("balance is only editable on manual accounts");
+  const now = new Date().toISOString();
+  db.prepare("UPDATE accounts SET balance = ?, balance_asof = ? WHERE id = ?").run(Number(balance) || 0, now, id);
+  recordBalance(id, Number(balance) || 0, now);
+  return true;
+}
+
+// Delete a manual account (never a Plaid-linked one) and its history.
+export function deleteManualAccount(id) {
+  const row = db.prepare("SELECT is_manual FROM accounts WHERE id = ?").get(id);
+  if (!row) return false;
+  if (!row.is_manual) throw new Error("only manual accounts can be deleted here");
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM account_balance_history WHERE account = ?").run(id);
+    db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return true;
+}
+
+export function getAccountHistory(id) {
+  return db.prepare("SELECT balance, at FROM account_balance_history WHERE account = ? ORDER BY at ASC").all(id);
+}
+
+// Remove a custom category (built-ins are protected). Case-insensitive.
+export function deleteCategory(name) {
+  const row = db.prepare("SELECT name, builtin FROM categories WHERE name = ? COLLATE NOCASE").get(String(name || ""));
+  if (!row) return { deleted: false, reason: "not found" };
+  if (row.builtin) return { deleted: false, reason: "built-in categories can't be removed" };
+  db.prepare("DELETE FROM categories WHERE name = ? COLLATE NOCASE").run(row.name);
+  return { deleted: true, name: row.name };
 }
 
 export function upsertTransaction(t) {

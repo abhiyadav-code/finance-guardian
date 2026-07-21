@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { GuardianStatus } from "@/components/finance/GuardianStatus";
 import { AccountsStrip } from "@/components/finance/AccountsStrip";
@@ -23,6 +25,12 @@ const Index = () => {
 
         {/* Accounts */}
         <div className="mt-6 animate-fade-in-up [animation-delay:80ms]">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-display text-xl">Accounts</h2>
+            <Link to="/accounts" className="inline-flex items-center gap-1.5 text-xs text-primary transition-colors hover:text-primary-glow">
+              Manage &amp; add accounts <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
           <AccountsStrip onConnect={() => setConnectOpen(true)} />
         </div>
 

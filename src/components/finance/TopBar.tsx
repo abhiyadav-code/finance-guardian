@@ -33,8 +33,9 @@ export function TopBar() {
           )}
         </div>
 
-        <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
+        <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
           <NavLink to="/" end className="hover:text-foreground" activeClassName="text-foreground">Dashboard</NavLink>
+          <NavLink to="/accounts" className="hover:text-foreground" activeClassName="text-foreground">Accounts</NavLink>
           <NavLink to="/cash-flow" className="hover:text-foreground" activeClassName="text-foreground">Cash flow</NavLink>
           <NavLink to="/liabilities" className="hover:text-foreground" activeClassName="text-foreground">Liabilities</NavLink>
           <NavLink to="/loans" className="hover:text-foreground" activeClassName="text-foreground">Loans</NavLink>

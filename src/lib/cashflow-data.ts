@@ -65,6 +65,29 @@ const cadenceDays: Record<Cadence, number> = {
   weekly: 7, biweekly: 14, semimonthly: 15, monthly: 30, quarterly: 91, annually: 365,
 };
 
+/** Convert a per-occurrence amount at a given cadence into a monthly figure. */
+export function monthlyEquivalent(amount: number, cadence: Cadence): number {
+  switch (cadence) {
+    case "weekly":      return amount * 4.33;
+    case "biweekly":    return amount * 2.17;
+    case "semimonthly": return amount * 2;
+    case "monthly":     return amount;
+    case "quarterly":   return amount / 3;
+    case "annually":    return amount / 12;
+  }
+}
+
+/** A forward-looking, one-off or seasonal cash-flow adjustment. */
+export type PlannedItem = {
+  id: string;
+  name: string;
+  kind: "income" | "expense";
+  amount: number;       // per month, positive
+  category?: string | null;
+  startMonth: string;   // YYYY-MM
+  endMonth: string;     // YYYY-MM (inclusive; == start for a one-off)
+};
+
 /** Generate all occurrences of a stream within [from, to]. */
 function occurrencesBetween(start: string, cadence: Cadence, from: Date, to: Date) {
   const stepDays = cadenceDays[cadence];

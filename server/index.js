@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import * as store from "./db.js";
 import * as plaid from "./plaid.js";
 import { computeBrief } from "./brief.js";
+import { aiConfigured, suggestBudgetCuts } from "./ai.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8787;
@@ -46,7 +47,7 @@ const api = express.Router();
 api.get("/health", (_req, res) => ok(res, { ok: true, ts: new Date().toISOString() }));
 
 // Which instance is this + Plaid env — drives the DEMO/LIVE badge in the UI.
-api.get("/config", (_req, res) => res.json({ instance: INSTANCE, plaid: plaid.plaidStatus() }));
+api.get("/config", (_req, res) => res.json({ instance: INSTANCE, plaid: plaid.plaidStatus(), ai: { configured: aiConfigured() } }));
 
 // Full app state for store hydration
 api.get("/state", wrap((_req, res) => res.json(store.getState())));
@@ -126,6 +127,44 @@ api.delete("/accounts/:id", wrap((req, res) => {
 }));
 
 api.get("/accounts/:id/history", wrap((req, res) => res.json({ history: store.getAccountHistory(req.params.id) })));
+
+// ----- Planned cash-flow adjustments (forecast) -----
+api.post("/planned", wrap((req, res) => {
+  const { name, kind, amount, category, startMonth, endMonth } = req.body ?? {};
+  if (!name || !kind || !startMonth) return res.status(400).json({ error: "name, kind, startMonth required" });
+  try {
+    res.json({ id: store.addPlannedItem({ name, kind, amount, category, startMonth, endMonth }) });
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "invalid item" });
+  }
+}));
+api.patch("/planned/:id", wrap((req, res) => {
+  if (!store.updatePlannedItem(req.params.id, req.body ?? {})) return res.status(404).json({ error: "not found" });
+  ok(res);
+}));
+api.delete("/planned/:id", wrap((req, res) => {
+  if (!store.deletePlannedItem(req.params.id)) return res.status(404).json({ error: "not found" });
+  ok(res);
+}));
+
+// ----- Budget savings suggestions (Claude when configured, else heuristic) -----
+api.post("/budget/suggest", async (req, res) => {
+  try {
+    const goal = req.body?.goal || "balanced";
+    const stats = store.computeCategoryStats();
+    if (aiConfigured()) {
+      try {
+        const suggestions = await suggestBudgetCuts(stats, goal);
+        return res.json({ source: "ai", suggestions });
+      } catch (e) {
+        console.warn("[ai] budget suggest failed, using heuristic:", e instanceof Error ? e.message : e);
+      }
+    }
+    res.json({ source: "heuristic", suggestions: store.heuristicBudgetSuggestions(goal) });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "suggest failed" });
+  }
+});
 
 // ----- Reports -----
 api.get("/reports/cc-payments", wrap((_req, res) =>

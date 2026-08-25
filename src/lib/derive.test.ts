@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
-  deriveSummary, deriveLiabilities, deriveLoans, deriveDueSchedule, dedupeAccounts, owedOf,
+  deriveSummary, deriveLiabilities, deriveLoans, deriveDueSchedule, deriveMonthlyForecast,
+  dedupeAccounts, owedOf,
 } from "./derive";
-import type { Account } from "./finance-data";
+import type { Account, Transaction } from "./finance-data";
+import type { IncomeStream, OutflowStream, PlannedItem } from "./cashflow-data";
 
 // Small factory so each test spells out only the fields it cares about.
 let n = 0;
@@ -214,6 +216,55 @@ describe("deriveDueSchedule (overdue / due-soon pager)", () => {
     // (max ~11 days from the 20th), so verify later stays empty here and dueSoon captures near ones.
     const s = deriveDueSchedule([card("n", 28)], NOW); // due Jul 28, in 8 days → dueSoon
     expect(s.dueSoon.map((i) => i.account.id)).toEqual(["n"]);
+  });
+});
+
+describe("deriveMonthlyForecast (13-month actuals + projection)", () => {
+  const NOW = new Date(2026, 6, 15); // Jul 15, 2026
+  const cash = [acct({ id: "chk", type: "checking", balance: 10_000 }), acct({ id: "brk", type: "investment", balance: 50_000 })];
+  const tx = (date: string, amount: number, category: string): Transaction =>
+    ({ id: `t${Math.random()}`, date, merchant: "m", amount, category, account: "chk", confidence: 1, essential: false });
+  const income: IncomeStream[] = [{ id: "i1", source: "Pay", amount: 5000, cadence: "monthly", nextDate: NOW.toISOString(), kind: "paycheck", active: true }];
+  const outflows: OutflowStream[] = [{ id: "o1", name: "Rent", amount: 2000, cadence: "monthly", nextDate: NOW.toISOString(), category: "Housing", kind: "rent" }];
+  const budgets = { Dining: 500 };
+  const planned: PlannedItem[] = [{ id: "p1", name: "Camp", kind: "expense", amount: 3000, startMonth: "2026-09", endMonth: "2026-09" }];
+  // March has real transactions → that month is "actual"
+  const txs = [tx("2026-03-05T00:00:00Z", 5000, "Income"), tx("2026-03-10T00:00:00Z", -1200, "Dining")];
+
+  const f = deriveMonthlyForecast(cash, txs, income, outflows, budgets, planned, NOW);
+  const byKey = (k: string) => f.months.find((m) => m.key === k)!;
+
+  it("spans 13 months Jan→Jan", () => {
+    expect(f.months).toHaveLength(13);
+    expect(f.months[0].key).toBe("2026-01");
+    expect(f.months[12].key).toBe("2027-01");
+  });
+
+  it("uses actuals for a past month that has transactions", () => {
+    const mar = byKey("2026-03");
+    expect(mar.actual).toBe(true);
+    expect(mar.income).toBe(5000);
+    expect(mar.expenses).toBe(1200);
+  });
+
+  it("projects future months from recurring income + bills + budgets", () => {
+    const aug = byKey("2026-08");
+    expect(aug.actual).toBe(false);
+    expect(aug.income).toBe(5000);          // recurring income
+    expect(aug.expenses).toBe(2500);        // 2000 bills + 500 discretionary
+  });
+
+  it("layers planned adjustments onto the right month", () => {
+    const sep = byKey("2026-09");
+    expect(sep.plannedExpense).toBe(3000);
+    expect(sep.expenses).toBe(5500);        // 2500 baseline + 3000 camp
+  });
+
+  it("anchors the forward cash line at current liquid and exposes investments to draw", () => {
+    expect(f.startCash).toBe(10_000);       // checking only (brokerage is investable, not cash)
+    expect(f.liquidatable).toBe(50_000);
+    expect(byKey("2026-01").cashOnHand).toBeNull(); // past → no cash line
+    expect(byKey("2026-07").cashOnHand).not.toBeNull();
   });
 });
 

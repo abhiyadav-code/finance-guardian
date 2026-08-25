@@ -157,6 +157,19 @@ db.exec(`
     at      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_pay_month ON payments (month);
+
+  -- Forward-looking cash-flow adjustments (a bonus, seasonal camp, a stock sale…).
+  -- Applied to every month in [start_month, end_month] inclusive.
+  CREATE TABLE IF NOT EXISTS planned_items (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,          -- 'income' | 'expense'
+    amount      REAL NOT NULL,          -- per month, positive
+    category    TEXT,
+    start_month TEXT NOT NULL,          -- YYYY-MM
+    end_month   TEXT NOT NULL,          -- YYYY-MM (== start for a one-off)
+    created_at  TEXT NOT NULL
+  );
 `);
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
@@ -283,8 +296,102 @@ export function getState() {
     .map((r) => r.name);
   const snapRow = db.prepare("SELECT value FROM meta WHERE key = 'funding_snapshot'").get();
   const fundingSnapshot = snapRow ? Number(snapRow.value) : null;
-  return { accounts, transactions, income, outflows, budgets, categories, fundingSnapshot };
+  const plannedItems = getPlannedItems();
+  return { accounts, transactions, income, outflows, budgets, categories, fundingSnapshot, plannedItems };
 }
+
+// ----- Planned cash-flow adjustments -----
+const toPlanned = (r) => ({
+  id: r.id, name: r.name, kind: r.kind, amount: r.amount,
+  category: r.category ?? null, startMonth: r.start_month, endMonth: r.end_month,
+});
+export function getPlannedItems() {
+  return db.prepare("SELECT * FROM planned_items ORDER BY start_month ASC, name ASC").all().map(toPlanned);
+}
+export function addPlannedItem({ name, kind, amount, category, startMonth, endMonth }) {
+  if (kind !== "income" && kind !== "expense") throw new Error("kind must be income or expense");
+  const id = `plan_${randomUUID()}`;
+  const start = String(startMonth).slice(0, 7);
+  const end = String(endMonth || startMonth).slice(0, 7);
+  db.prepare(
+    `INSERT INTO planned_items (id, name, kind, amount, category, start_month, end_month, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, String(name || "Adjustment"), kind, Math.abs(Number(amount) || 0), category ?? null,
+        start, end < start ? start : end, new Date().toISOString());
+  return id;
+}
+export function updatePlannedItem(id, patch = {}) {
+  const cols = { name: "name", kind: "kind", amount: "amount", category: "category", startMonth: "start_month", endMonth: "end_month" };
+  const sets = [], vals = [];
+  for (const [k, col] of Object.entries(cols)) {
+    if (!(k in patch)) continue;
+    let v = patch[k];
+    if (k === "amount") v = Math.abs(Number(v) || 0);
+    if (k === "startMonth" || k === "endMonth") v = String(v).slice(0, 7);
+    sets.push(`${col} = ?`); vals.push(v);
+  }
+  if (!sets.length) return false;
+  vals.push(id);
+  return db.prepare(`UPDATE planned_items SET ${sets.join(", ")} WHERE id = ?`).run(...vals).changes > 0;
+}
+export function deletePlannedItem(id) {
+  return db.prepare("DELETE FROM planned_items WHERE id = ?").run(id).changes > 0;
+}
+
+// ----- Budget savings suggestions -----
+// Trailing-90-day monthly spend per budgeted category (context for AI or heuristic).
+export function computeCategoryStats() {
+  const budgetRows = db.prepare("SELECT category, amount FROM budgets").all();
+  const budgets = Object.fromEntries(budgetRows.map((b) => [b.category, b.amount]));
+  const cutoff = Date.now() - 90 * 86_400_000;
+  const spend = new Map();
+  const merchants = new Map();
+  for (const t of db.prepare("SELECT amount, category, merchant, date FROM transactions").all()) {
+    if (t.amount >= 0) continue;
+    if (!(t.category in budgets)) continue;
+    if (new Date(t.date).getTime() < cutoff) continue;
+    spend.set(t.category, (spend.get(t.category) ?? 0) + Math.abs(t.amount));
+    if (!merchants.has(t.category)) merchants.set(t.category, new Set());
+    merchants.get(t.category).add(t.merchant);
+  }
+  return Object.keys(budgets).map((category) => ({
+    category,
+    budget: budgets[category],
+    monthlySpend: Math.round((spend.get(category) ?? 0) / 3),
+    topMerchants: [...(merchants.get(category) ?? [])].slice(0, 4),
+  }));
+}
+
+// Heuristic "where can I cut" — spend a smaller fraction of recent spend, by goal.
+const GOAL_FACTOR = { aggressive_save: 0.75, balanced: 0.85, comfort: 0.92 };
+export function heuristicBudgetSuggestions(goal = "balanced") {
+  const factor = GOAL_FACTOR[goal] ?? GOAL_FACTOR.balanced;
+  const round25 = (n) => Math.max(0, Math.round(n / 25) * 25);
+  const stats = computeCategoryStats();
+  const out = [];
+  for (const s of stats) {
+    // Base the cut on recent spend when it's a meaningful share of the budget
+    // (real savings); otherwise trim the ceiling. Same base for suggestion and
+    // saving so the numbers stay consistent.
+    const spendDriven = s.monthlySpend > 0 && s.monthlySpend >= 0.4 * s.budget;
+    const base = spendDriven ? s.monthlySpend : s.budget;
+    if (base <= 0) continue;
+    const suggested = round25(base * factor);
+    const monthlySaving = Math.max(0, base - suggested);
+    if (monthlySaving < 25) continue; // not worth surfacing
+    out.push({
+      category: s.category,
+      current: s.budget,
+      suggested,
+      monthlySaving,
+      rationale: spendDriven
+        ? `You've averaged ${fmtUsd(s.monthlySpend)}/mo on ${s.category} (last 90 days). Trimming to ${fmtUsd(suggested)} would save about ${fmtUsd(monthlySaving)}/mo.`
+        : `Your ${s.category} ceiling is ${fmtUsd(s.budget)}. Tightening it to ${fmtUsd(suggested)} frees ${fmtUsd(monthlySaving)}/mo of headroom.`,
+    });
+  }
+  return out.sort((a, b) => b.monthlySaving - a.monthlySaving).slice(0, 6);
+}
+const fmtUsd = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
 
 // Add a custom category (idempotent, case-insensitive de-dup). Returns the
 // canonical stored name.

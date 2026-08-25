@@ -3,6 +3,9 @@
 // production instance) everything resolves to zero / empty states.
 import type { Transaction, Category, LiabilityGroup } from "./finance-data";
 import type { Account } from "./finance-store";
+import {
+  monthlyEquivalent, type IncomeStream, type OutflowStream, type PlannedItem,
+} from "./cashflow-data";
 
 const LIQUID_TYPES = new Set(["checking", "savings"]);
 const NON_SPEND = new Set<Category>(["Income", "Transfer"]);
@@ -282,6 +285,140 @@ export function deriveLiabilities(
     remaining,
     pctAllocated: snapshot > 0 ? allocated / snapshot : 0,
     overAllocated: allocated > snapshot,
+  };
+}
+
+// ----- 13-month cash-flow forecast (actuals + projection) -----
+
+export type ForecastMonth = {
+  key: string;          // YYYY-MM
+  label: string;        // "Jan 26"
+  actual: boolean;      // true = reconstructed from real transactions
+  income: number;
+  expenses: number;
+  net: number;
+  cashOnHand: number | null;  // forward months only (end-of-month projected cash)
+  plannedIncome: number;
+  plannedExpense: number;
+};
+
+export type Forecast = {
+  months: ForecastMonth[];
+  totalIncome: number;
+  totalExpenses: number;
+  expenseToIncome: number;      // ratio over the window
+  startCash: number;            // liquid now
+  liquidatable: number;         // investment assets that could be sold
+  lowest: { label: string; value: number } | null; // min forward cash
+  dipsBelowZero: boolean;
+  firstDipLabel: string | null;
+};
+
+const incomeOf = (t: Transaction) => (t.amount > 0 && t.category !== "Transfer" ? t.amount : 0);
+
+/**
+ * A calendar-year (Jan→Jan, 13 months) cash-flow forecast. Past months are
+ * reconstructed from transactions; the current and future months are projected
+ * from recurring income/bills + category budgets + planned adjustments. A
+ * forward running-cash line shows when cash would dip (time to liquidate).
+ */
+export function deriveMonthlyForecast(
+  accountsRaw: Account[],
+  transactions: Transaction[],
+  income: IncomeStream[],
+  outflows: OutflowStream[],
+  budgets: Record<string, number>,
+  plannedItems: PlannedItem[],
+  now = new Date()
+): Forecast {
+  const accounts = dedupeAccounts(accountsRaw);
+  const year = now.getFullYear();
+  const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const firstOfCurrent = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  // Recurring monthly baselines for projected months.
+  const monthlyIncome = income.filter((s) => s.active).reduce((s, i) => s + monthlyEquivalent(i.amount, i.cadence), 0);
+  const monthlyBills = outflows.reduce((s, o) => s + monthlyEquivalent(o.amount, o.cadence), 0);
+  const monthlyDiscretionary = Object.values(budgets).reduce((s, n) => s + n, 0);
+  const projectedExpenseBase = monthlyBills + monthlyDiscretionary;
+
+  // Actuals per month from transactions.
+  const actualByMonth = new Map<string, { income: number; expenses: number; count: number }>();
+  for (const t of transactions) {
+    const d = new Date(t.date);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const cur = actualByMonth.get(key) ?? { income: 0, expenses: 0, count: 0 };
+    cur.income += incomeOf(t);
+    if (isSpend(t)) cur.expenses += Math.abs(t.amount);
+    cur.count += 1;
+    actualByMonth.set(key, cur);
+  }
+
+  const plannedFor = (key: string) => {
+    let inc = 0, exp = 0;
+    for (const p of plannedItems) {
+      if (key >= p.startMonth && key <= p.endMonth) {
+        if (p.kind === "income") inc += p.amount; else exp += p.amount;
+      }
+    }
+    return { inc, exp };
+  };
+
+  const startCash = accounts.filter((a) => LIQUID_TYPES.has(a.type)).reduce((s, a) => s + a.balance, 0);
+  const liquidatable = accounts.filter((a) => a.type === "investment").reduce((s, a) => s + a.balance, 0);
+
+  const months: ForecastMonth[] = [];
+  let running = startCash;
+  let lowest: { label: string; value: number } | null = null;
+  let firstDipLabel: string | null = null;
+
+  for (let i = 0; i < 13; i++) {
+    const d = new Date(year, i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+    const isPast = monthStart < firstOfCurrent;
+    const act = actualByMonth.get(key);
+    const useActual = isPast && !!act && act.count > 0;
+    const planned = plannedFor(key);
+
+    let inc: number, exp: number;
+    if (useActual) {
+      inc = Math.round(act!.income);
+      exp = Math.round(act!.expenses);
+    } else {
+      inc = Math.round(monthlyIncome + planned.inc);
+      exp = Math.round(projectedExpenseBase + planned.exp);
+    }
+    const net = inc - exp;
+
+    // Forward cash line: end-of-month projected cash, from the current month on.
+    let cashOnHand: number | null = null;
+    if (key >= currentKey) {
+      running += net;
+      cashOnHand = Math.round(running);
+      if (lowest === null || cashOnHand < lowest.value) lowest = { label, value: cashOnHand };
+      if (cashOnHand < 0 && firstDipLabel === null) firstDipLabel = label;
+    }
+
+    months.push({
+      key, label, actual: useActual, income: inc, expenses: exp, net,
+      cashOnHand, plannedIncome: Math.round(planned.inc), plannedExpense: Math.round(planned.exp),
+    });
+  }
+
+  const totalIncome = months.reduce((s, m) => s + m.income, 0);
+  const totalExpenses = months.reduce((s, m) => s + m.expenses, 0);
+  return {
+    months,
+    totalIncome,
+    totalExpenses,
+    expenseToIncome: totalIncome > 0 ? totalExpenses / totalIncome : 0,
+    startCash: Math.round(startCash),
+    liquidatable: Math.round(liquidatable),
+    lowest,
+    dipsBelowZero: !!lowest && lowest.value < 0,
+    firstDipLabel,
   };
 }
 

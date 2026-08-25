@@ -15,7 +15,7 @@ import {
 } from "./finance-data";
 import {
   seedIncome, seedOutflows, seedBudgets,
-  type IncomeStream, type OutflowStream,
+  type IncomeStream, type OutflowStream, type PlannedItem,
 } from "./cashflow-data";
 import { api } from "./api";
 import { toast } from "sonner";
@@ -44,6 +44,8 @@ type State = {
   categories: Category[];
   /** frozen checking balance the payment allocation draws from (null = use live) */
   fundingSnapshot: number | null;
+  /** forward-looking one-off / seasonal cash-flow adjustments */
+  plannedItems: PlannedItem[];
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -63,6 +65,10 @@ type State = {
   setFundingAccount: (accountId: string) => void;
   /** manually reclassify an account's type (persists across syncs) */
   setAccountType: (id: string, type: Account["type"]) => void;
+  /** add a forward cash-flow adjustment; resolves with its id */
+  addPlannedItem: (input: Omit<PlannedItem, "id">) => Promise<string | null>;
+  updatePlannedItem: (id: string, patch: Partial<PlannedItem>) => void;
+  removePlannedItem: (id: string) => void;
   /** create a manual (non-Plaid) account; resolves with its id */
   addManualAccount: (input: { name: string; type: Account["type"]; balance: number; nickname?: string }) => Promise<string | null>;
   /** rename an account (nickname only; Plaid name preserved) */
@@ -96,6 +102,7 @@ export const useFinanceStore = create<State>((set, get) => ({
   budgets: initialBudgets,
   categories: [...DEFAULT_CATEGORIES],
   fundingSnapshot: seedAccounts.find((a) => a.isFunding)?.balance ?? null,
+  plannedItems: [],
   hydrated: false,
 
   hydrate: async () => {
@@ -109,6 +116,7 @@ export const useFinanceStore = create<State>((set, get) => ({
         budgets: state.budgets,
         categories: state.categories?.length ? state.categories : [...DEFAULT_CATEGORIES],
         fundingSnapshot: state.fundingSnapshot ?? null,
+        plannedItems: state.plannedItems ?? [],
         hydrated: true,
       });
     } catch (e) {
@@ -188,6 +196,25 @@ export const useFinanceStore = create<State>((set, get) => ({
   setAccountType: (id, type) => {
     set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, type } : a)) }));
     persist(api.setAccountType(id, type), "setAccountType");
+  },
+  addPlannedItem: async (input) => {
+    try {
+      const { id } = await api.createPlanned(input);
+      set((s) => ({ plannedItems: [...s.plannedItems, { id, ...input }] }));
+      return id;
+    } catch (e) {
+      console.error("[finance-store] addPlannedItem failed:", e);
+      toast.error("Couldn't add adjustment", { description: "The backend may be offline." });
+      return null;
+    }
+  },
+  updatePlannedItem: (id, patch) => {
+    set((s) => ({ plannedItems: s.plannedItems.map((p) => (p.id === id ? { ...p, ...patch } : p)) }));
+    persist(api.updatePlanned(id, patch), "updatePlannedItem");
+  },
+  removePlannedItem: (id) => {
+    set((s) => ({ plannedItems: s.plannedItems.filter((p) => p.id !== id) }));
+    persist(api.deletePlanned(id), "removePlannedItem");
   },
   addManualAccount: async (input) => {
     try {

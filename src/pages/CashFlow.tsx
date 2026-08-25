@@ -7,17 +7,28 @@ import {
 import {
   ArrowLeft, ArrowDownRight, ArrowUpRight, Wallet, Briefcase, Banknote,
   Repeat, CreditCard, Home, Zap, Car, Sparkles, AlertTriangle,
-  Wand2, Check, Loader2, TrendingUp, TrendingDown, Minus,
+  Wand2, Check, Loader2, TrendingUp, TrendingDown, Minus, Plus, Trash2, Pencil,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
-import { fmt, type Transaction, type Category } from "@/lib/finance-data";
-import { buildProjection, type IncomeStream, type OutflowStream, type Cadence } from "@/lib/cashflow-data";
+import { fmt, fmtCents, type Transaction, type Category } from "@/lib/finance-data";
+import {
+  buildProjection,
+  type IncomeStream, type OutflowStream, type Cadence, type PlannedItem,
+} from "@/lib/cashflow-data";
+import { deriveMonthlyForecast, type Forecast } from "@/lib/derive";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 
 const HORIZONS: { label: string; days: number }[] = [
@@ -55,6 +66,12 @@ const CashFlow = () => {
   const setBudget = useFinanceStore((s) => s.setBudget);
   const toggleIncome = useFinanceStore((s) => s.toggleIncome);
   const setIncomeAmount = useFinanceStore((s) => s.setIncomeAmount);
+  const plannedItems = useFinanceStore((s) => s.plannedItems);
+
+  const forecast = useMemo(
+    () => deriveMonthlyForecast(accounts, transactions, income, outflows, budgets, plannedItems),
+    [accounts, transactions, income, outflows, budgets, plannedItems]
+  );
 
   const [days, setDays] = useState(60);
 
@@ -100,18 +117,29 @@ const CashFlow = () => {
       <TopBar />
 
       <main className="mx-auto max-w-7xl px-6 py-8 pb-28 md:px-10 md:py-10 md:pb-10">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">
-              <ArrowLeft className="h-3 w-3" /> Dashboard
-            </Link>
-            <h1 className="font-display mt-2 text-4xl md:text-5xl">Cash flow</h1>
-            <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-              What's coming in, what's going out, and what your bank balance looks like — including the future.
-            </p>
-          </div>
+        <div>
+          <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-3 w-3" /> Dashboard
+          </Link>
+          <h1 className="font-display mt-2 text-4xl md:text-5xl">Cash flow</h1>
+          <p className="mt-1 max-w-xl text-sm text-muted-foreground">
+            Plan the year — actuals vs. projections, model what-ifs, and set budgets to see the impact.
+          </p>
+        </div>
 
-          {/* Horizon picker */}
+        <Tabs defaultValue="forecast" className="mt-6">
+          <TabsList>
+            <TabsTrigger value="forecast">Forecast</TabsTrigger>
+            <TabsTrigger value="budget">Budget</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="forecast" className="mt-6 space-y-6">
+            <ForecastSection forecast={forecast} />
+            <AdjustmentsManager plannedItems={plannedItems} />
+
+        {/* Near-term daily projection */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Near term · daily cash on hand</p>
           <div className="inline-flex rounded-full border border-border bg-card p-1">
             {HORIZONS.map((h) => (
               <button
@@ -128,7 +156,7 @@ const CashFlow = () => {
         </div>
 
         {/* KPI strip */}
-        <section className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Kpi label="Cash on hand today" value={fmt(startingCash)} sub="Checking + savings" tone="neutral" Icon={Wallet} />
           <Kpi label="Projected in next 30d" value={fmt(monthlyIn)} sub={`${income.filter((i) => i.active).length} active streams`} tone="up" Icon={ArrowUpRight} />
           <Kpi label="Projected out next 30d" value={fmt(monthlyOut)} sub="Bills + budgets" tone="down" Icon={ArrowDownRight} />
@@ -212,25 +240,302 @@ const CashFlow = () => {
           )}
         </section>
 
-        {/* Two-column body: streams + budget projector */}
-        <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-2">
-          <IncomeCard income={income} onToggle={toggleIncome} onAmount={setIncomeAmount} />
-          <OutflowCard outflows={outflows} />
-        </div>
+            {/* Recurring drivers */}
+            <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+              <IncomeCard income={income} onToggle={toggleIncome} onAmount={setIncomeAmount} />
+              <OutflowCard outflows={outflows} />
+            </div>
+          </TabsContent>
 
-        <div className="mt-6">
-          <BudgetProjector
-            budgets={budgets}
-            setBudget={setBudget}
-            transactions={transactions}
-            monthlyIn={monthlyIn}
-            essentialOut={outflows.reduce((s, o) => s + o.amount, 0)}
-          />
-        </div>
+          <TabsContent value="budget" className="mt-6">
+            <BudgetProjector
+              budgets={budgets}
+              setBudget={setBudget}
+              transactions={transactions}
+              monthlyIn={monthlyIn}
+              essentialOut={outflows.reduce((s, o) => s + o.amount, 0)}
+            />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );
 };
+
+// ---------- 12-month forecast ----------
+
+const monthName = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+};
+const monthRangeLabel = (start: string, end: string) =>
+  start === end ? monthName(start) : `${monthName(start).split(" ")[0]}–${monthName(end)}`;
+
+function ForecastSection({ forecast: f }: { forecast: Forecast }) {
+  const ratioPct = Math.round(f.expenseToIncome * 100);
+  const now = new Date();
+  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const nowLabel = f.months.find((m) => m.key === nowKey)?.label;
+  return (
+    <section className="panel p-6 md:p-8">
+      <header>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Year ahead</p>
+        <h2 className="font-display mt-1 text-2xl">12-month cash-flow forecast</h2>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          Actuals for months that have passed, projections ahead — including recurring income &amp; bills,
+          category budgets, and your planned adjustments.
+        </p>
+      </header>
+
+      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <FKpi label="Cash on hand" value={fmt(f.startCash)} tone="neutral" sub="checking + savings" />
+        <FKpi label="Expense : income" value={`${ratioPct}%`} tone={ratioPct <= 100 ? "up" : "alert"}
+          sub={ratioPct <= 100 ? "within income" : "over income"} />
+        <FKpi label="Low point" value={f.lowest ? fmt(f.lowest.value) : "—"} tone={f.dipsBelowZero ? "alert" : "neutral"}
+          sub={f.lowest?.label ?? ""} />
+        <FKpi label="Investments to draw" value={fmt(f.liquidatable)} tone="neutral" sub="if you must liquidate" />
+      </div>
+
+      {f.dipsBelowZero && (
+        <div className="mt-4 flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+          <p className="text-destructive/90">
+            Cash is projected to dip to <span className="font-medium">{fmt(f.lowest!.value)}</span> around {f.firstDipLabel}.
+            Plan a transfer or asset sale, or trim spending in the <span className="font-medium">Budget</span> tab.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-5 h-[340px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={f.months} margin={{ left: 0, right: 0, top: 8, bottom: 0 }}>
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 4" vertical={false} />
+            <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+            {/* left: monthly flows (income/expenses/net) */}
+            <YAxis yAxisId="flow" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false}
+              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+            {/* right: running cash balance (much larger scale) */}
+            <YAxis yAxisId="cash" orientation="right" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false}
+              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+            <Tooltip content={<ForecastTooltip />} />
+            <ReferenceLine yAxisId="flow" y={0} stroke="hsl(var(--destructive))" strokeDasharray="3 3" />
+            {nowLabel && (
+              <ReferenceLine yAxisId="flow" x={nowLabel} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4"
+                label={{ value: "now", position: "insideTopRight", fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
+            )}
+            <Bar yAxisId="flow" dataKey="income" name="Income" fill="hsl(var(--success))" radius={[3, 3, 0, 0]} maxBarSize={20} />
+            <Bar yAxisId="flow" dataKey="expenses" name="Expenses" fill="hsl(var(--destructive))" radius={[3, 3, 0, 0]} maxBarSize={20} />
+            <Line yAxisId="flow" type="monotone" dataKey="net" name="Net" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+            <Line yAxisId="cash" type="monotone" dataKey="cashOnHand" name="Cash on hand" stroke="hsl(var(--foreground))" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Bars: income vs. expenses each month · amber line: net (left axis) · dashed line: projected cash balance
+        (right axis, forward only). The dotted marker is this month; left of it is actuals where we have history.
+      </p>
+    </section>
+  );
+}
+
+function FKpi({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone: "up" | "alert" | "neutral" }) {
+  const tint = tone === "up" ? "text-success" : tone === "alert" ? "text-destructive" : "text-foreground";
+  return (
+    <div className="rounded-xl border border-border bg-background/40 p-4">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+      <p className={`font-mono-fin mt-1.5 text-xl tabular-nums ${tint}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+function ForecastTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div className="rounded-xl border border-border bg-popover p-3 text-xs shadow-soft">
+      <p className="font-medium">{label} <span className="text-muted-foreground">· {p.actual ? "actual" : "projected"}</span></p>
+      <div className="mt-2 space-y-0.5">
+        <p className="text-success">Income {fmt(p.income)}</p>
+        <p className="text-destructive">Expenses {fmt(p.expenses)}</p>
+        <p className={p.net >= 0 ? "text-success" : "text-destructive"}>Net {p.net >= 0 ? "+" : "−"}{fmt(Math.abs(p.net))}</p>
+        {p.cashOnHand != null && <p className="border-t border-border pt-1 text-foreground">Cash after: {fmt(p.cashOnHand)}</p>}
+        {(p.plannedIncome > 0 || p.plannedExpense > 0) && (
+          <p className="text-[10px] text-muted-foreground">
+            incl. planned {p.plannedIncome > 0 ? `+${fmt(p.plannedIncome)}` : ""}{p.plannedExpense > 0 ? ` −${fmt(p.plannedExpense)}` : ""}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Forward adjustments ----------
+
+function AdjustmentsManager({ plannedItems }: { plannedItems: PlannedItem[] }) {
+  const removePlannedItem = useFinanceStore((s) => s.removePlannedItem);
+  const [editing, setEditing] = useState<PlannedItem | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+
+  return (
+    <section className="panel p-6 md:p-8">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">What-ifs</p>
+          <h2 className="font-display mt-1 text-2xl">Planned income &amp; expenses</h2>
+          <p className="mt-1 max-w-xl text-sm text-muted-foreground">
+            Add a bonus, a seasonal expense (day school, summer camp), or a planned asset sale. It flows straight
+            into the forecast above so you can see the impact and when you'd need to draw down.
+          </p>
+        </div>
+        <Button onClick={() => setAddOpen(true)} className="bg-primary text-primary-foreground hover:bg-primary/90">
+          <Plus className="mr-1.5 h-4 w-4" /> Add adjustment
+        </Button>
+      </header>
+
+      {plannedItems.length === 0 ? (
+        <div className="mt-6 rounded-xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+          No planned adjustments yet. Add a one-off or seasonal item to model it.
+        </div>
+      ) : (
+        <ul className="mt-5 divide-y divide-border">
+          {plannedItems.map((p) => {
+            const Icon = p.kind === "income" ? ArrowUpRight : ArrowDownRight;
+            const tone = p.kind === "income" ? "text-success" : "text-destructive";
+            return (
+              <li key={p.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${p.kind === "income" ? "bg-success/10 ring-1 ring-success/30" : "bg-destructive/10 ring-1 ring-destructive/20"}`}>
+                    <Icon className={`h-4 w-4 ${tone}`} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{p.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {monthRangeLabel(p.startMonth, p.endMonth)}{p.category ? ` · ${p.category}` : ""}
+                      {p.startMonth !== p.endMonth ? " · per month" : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <p className={`font-mono-fin text-sm tabular-nums ${tone}`}>{p.kind === "income" ? "+" : "−"}{fmtCents(p.amount)}</p>
+                  <button onClick={() => setEditing(p)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground" title="Edit">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => { removePlannedItem(p.id); toast.success(`Removed ${p.name}`); }} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-destructive hover:bg-destructive/10" title="Delete">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <AdjustmentDialog open={addOpen} onOpenChange={setAddOpen} />
+      <AdjustmentDialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null); }} existing={editing ?? undefined} />
+    </section>
+  );
+}
+
+function AdjustmentDialog({
+  open, onOpenChange, existing,
+}: { open: boolean; onOpenChange: (v: boolean) => void; existing?: PlannedItem }) {
+  const categories = useFinanceStore((s) => s.categories);
+  const addPlannedItem = useFinanceStore((s) => s.addPlannedItem);
+  const updatePlannedItem = useFinanceStore((s) => s.updatePlannedItem);
+
+  const thisMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const [name, setName] = useState(existing?.name ?? "");
+  const [kind, setKind] = useState<"income" | "expense">(existing?.kind ?? "expense");
+  const [amount, setAmount] = useState(existing ? String(existing.amount) : "");
+  const [category, setCategory] = useState(existing?.category ?? "");
+  const [start, setStart] = useState(existing?.startMonth ?? thisMonth);
+  const [end, setEnd] = useState(existing?.endMonth ?? existing?.startMonth ?? thisMonth);
+
+  // reset local state when opening a different item
+  const key = existing?.id ?? "new";
+  const [seed, setSeed] = useState(key);
+  if (seed !== key) {
+    setSeed(key);
+    setName(existing?.name ?? ""); setKind(existing?.kind ?? "expense");
+    setAmount(existing ? String(existing.amount) : ""); setCategory(existing?.category ?? "");
+    setStart(existing?.startMonth ?? thisMonth); setEnd(existing?.endMonth ?? existing?.startMonth ?? thisMonth);
+  }
+
+  const save = () => {
+    if (!name.trim()) { toast.error("Name the adjustment"); return; }
+    const payload = {
+      name: name.trim(), kind, amount: Number(amount) || 0,
+      category: category || null, startMonth: start, endMonth: end < start ? start : end,
+    };
+    if (existing) { updatePlannedItem(existing.id, payload); toast.success(`Updated ${payload.name}`); }
+    else { addPlannedItem(payload); toast.success(`Added ${payload.name}`); }
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="font-display text-2xl">{existing ? "Edit adjustment" : "Add an adjustment"}</DialogTitle>
+          <DialogDescription>A one-off or seasonal amount. Set the same month for both to make it a one-off.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <AField label="Name">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Q1 bonus / Summer camp" className="h-9" autoFocus />
+          </AField>
+          <div className="grid grid-cols-2 gap-3">
+            <AField label="Type">
+              <Select value={kind} onValueChange={(v) => setKind(v as "income" | "expense")}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="income">Income</SelectItem>
+                  <SelectItem value="expense">Expense</SelectItem>
+                </SelectContent>
+              </Select>
+            </AField>
+            <AField label="Amount / month">
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="h-9 pl-6" />
+              </div>
+            </AField>
+          </div>
+          <AField label="Category (optional)">
+            <Select value={category || "none"} onValueChange={(v) => setCategory(v === "none" ? "" : v)}>
+              <SelectTrigger className="h-9"><SelectValue placeholder="None" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </AField>
+          <div className="grid grid-cols-2 gap-3">
+            <AField label="From month">
+              <Input type="month" value={start} onChange={(e) => setStart(e.target.value)} className="h-9" />
+            </AField>
+            <AField label="To month">
+              <Input type="month" value={end} onChange={(e) => setEnd(e.target.value)} className="h-9" />
+            </AField>
+          </div>
+        </div>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-muted-foreground">Cancel</Button>
+          <Button onClick={save} className="bg-primary text-primary-foreground hover:bg-primary/90">{existing ? "Save" : "Add"}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{label}</label>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
+}
 
 // ---------- Components ----------
 
@@ -479,16 +784,27 @@ function BudgetProjector({
   );
 
   async function requestSuggestions(targetGoal: SuggestionGoal) {
-    // AI budget suggestions are moving to the Claude API (see roadmap). The old
-    // cloud function has been removed; show a placeholder until that lands.
+    // Claude when a key is configured (server-side), else a local heuristic.
     setGoal(targetGoal);
-    setLoading(false);
+    setLoading(true);
     setSuggestions(null);
     setSummary("");
-    void stats; // (will feed the Claude prompt)
-    toast.info("AI budget suggestions are coming soon", {
-      description: "This will run on the Claude API in an upcoming update.",
-    });
+    try {
+      const { source, suggestions } = await api.budgetSuggest(targetGoal);
+      setSuggestions(suggestions.map((s) => ({
+        category: s.category, suggested: s.suggested, rationale: s.rationale, confidence: 1,
+      })));
+      const totalSave = suggestions.reduce((t, s) => t + (s.monthlySaving || 0), 0);
+      setSummary(
+        suggestions.length
+          ? `${source === "ai" ? "Claude" : "Guardian"} found ${suggestions.length} cut${suggestions.length === 1 ? "" : "s"} worth about ${fmt(totalSave)}/mo — roughly ${fmt(totalSave * 12)}/yr. Apply what fits; the forecast updates instantly.`
+          : "You're already lean in these categories — no obvious cuts."
+      );
+    } catch (e) {
+      toast.error("Couldn't get suggestions", { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setLoading(false);
+    }
   }
 
   function applyAll() {

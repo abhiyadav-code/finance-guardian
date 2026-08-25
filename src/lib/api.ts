@@ -48,7 +48,10 @@ export type AppState = {
   budgets: Record<Category, number>;
   categories: Category[];
   fundingSnapshot: number | null;
+  plannedItems: import("./cashflow-data").PlannedItem[];
 };
+
+export type BudgetSuggestion = { category: string; current: number; suggested: number; monthlySaving: number; rationale: string };
 
 export type Api = {
   getState: () => Promise<AppState>;
@@ -72,7 +75,11 @@ export type Api = {
     payments: { month: string; total: number }[];
     balances: { month: string; owed: number }[];
   }>;
-  config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string } }>;
+  createPlanned: (p: Omit<import("./cashflow-data").PlannedItem, "id">) => Promise<{ id: string }>;
+  updatePlanned: (id: string, patch: Partial<import("./cashflow-data").PlannedItem>) => Promise<unknown>;
+  deletePlanned: (id: string) => Promise<unknown>;
+  budgetSuggest: (goal: string) => Promise<{ source: "ai" | "heuristic"; suggestions: BudgetSuggestion[] }>;
+  config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string }; ai?: { configured: boolean } }>;
   plaidStatus: () => Promise<{ configured: boolean; env: string }>;
   plaidLinkToken: () => Promise<{ link_token: string }>;
   plaidExchange: (
@@ -105,6 +112,10 @@ const liveApi: Api = {
   accountHistory: (id) => req("GET", `/accounts/${id}/history`),
   deleteCategory: (name) => req("DELETE", `/categories/${encodeURIComponent(name)}`),
   ccPaymentsReport: () => req("GET", "/reports/cc-payments"),
+  createPlanned: (p) => req("POST", "/planned", p),
+  updatePlanned: (id, patch) => req("PATCH", `/planned/${id}`, patch),
+  deletePlanned: (id) => req("DELETE", `/planned/${id}`),
+  budgetSuggest: (goal) => req("POST", "/budget/suggest", { goal }),
 
   config: () => req("GET", "/config"),
 
@@ -130,7 +141,21 @@ function demoState(): AppState {
     ) as Record<Category, number>,
     categories: [...DEFAULT_CATEGORIES],
     fundingSnapshot: demoAccounts.find((a) => a.isFunding)?.balance ?? null,
+    plannedItems: demoPlannedItems(),
   };
+}
+
+function ym(offsetMonths: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + offsetMonths);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function demoPlannedItems() {
+  return [
+    { id: "plan_demo1", name: "Q1 bonus", kind: "income" as const, amount: 18000, category: "Income", startMonth: ym(2), endMonth: ym(2) },
+    { id: "plan_demo2", name: "Sasha summer camp", kind: "expense" as const, amount: 3200, category: "Childcare", startMonth: ym(3), endMonth: ym(5) },
+    { id: "plan_demo3", name: "Property tax", kind: "expense" as const, amount: 6800, category: "Housing", startMonth: ym(4), endMonth: ym(4) },
+  ];
 }
 
 const demoApi: Api = {
@@ -151,6 +176,30 @@ const demoApi: Api = {
   deleteAccount: async () => ({ ok: true }),
   accountHistory: async () => ({ history: [] }),
   deleteCategory: async () => ({ ok: true }),
+  createPlanned: async () => ({ id: `plan_demo_${Date.now()}` }),
+  updatePlanned: async () => ({ ok: true }),
+  deletePlanned: async () => ({ ok: true }),
+  budgetSuggest: async (goal) => {
+    const cut = goal === "aggressive_save" ? 0.75 : goal === "comfort" ? 0.92 : 0.85;
+    const src = [
+      { category: "Dining", current: 450, spend: 520 },
+      { category: "Shopping", current: 400, spend: 560 },
+      { category: "Travel", current: 600, spend: 810 },
+      { category: "Subscriptions", current: 120, spend: 180 },
+    ];
+    const round25 = (n: number) => Math.max(0, Math.round((n * cut) / 25) * 25);
+    return {
+      source: "heuristic" as const,
+      suggestions: src.map((s) => {
+        const suggested = round25(s.spend);
+        return {
+          category: s.category, current: s.current, suggested,
+          monthlySaving: Math.max(0, Math.max(s.current, s.spend) - suggested),
+          rationale: `You've averaged $${s.spend}/mo on ${s.category}. Trimming to $${suggested} frees $${Math.max(0, Math.max(s.current, s.spend) - suggested)}/mo.`,
+        };
+      }).filter((s) => s.suggested < s.current || s.monthlySaving > 0),
+    };
+  },
   ccPaymentsReport: async () => {
     // Six months of illustrative progress: balances trending down, steady payments.
     const months: { month: string; total: number }[] = [];

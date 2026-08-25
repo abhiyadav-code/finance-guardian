@@ -285,6 +285,75 @@ export function deriveLiabilities(
   };
 }
 
+// ----- Bill due dates: what's overdue / due soon (priority pager) -----
+
+const DAY_MS = 86_400_000;
+const DUE_SOON_DAYS = 14;
+const lastDayOfMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate();
+
+export type DueItem = {
+  account: Account;
+  dueDate: Date;
+  daysUntilDue: number;   // negative = overdue
+  overdue: boolean;
+  overdueByDays: number;
+  amountDue: number;      // statement if present, else owed
+  minimumDue: number;
+  autopay: boolean;
+  paid: boolean;
+};
+
+export type DueSchedule = {
+  overdue: DueItem[];
+  dueSoon: DueItem[];
+  later: DueItem[];
+  overdueMinDue: number;
+  dueSoonMinDue: number;
+  nextDue: DueItem | null;
+  hasAny: boolean;
+};
+
+export function deriveDueSchedule(accountsRaw: Account[], now = new Date()): DueSchedule {
+  const accounts = dedupeAccounts(accountsRaw);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const items: DueItem[] = [];
+  for (const a of accounts) {
+    if (!isLiability(a)) continue;
+    const owed = owedOf(a);
+    const statement = a.statementBalance ?? 0;
+    if (owed <= 0 && statement <= 0) continue;
+    if (!a.dueDay) continue;
+    const paid = a.payStatus === "paid";
+    const y = now.getFullYear(), m = now.getMonth();
+    const dueDate = new Date(y, m, Math.min(a.dueDay, lastDayOfMonth(y, m)));
+    const daysUntilDue = Math.round((dueDate.getTime() - startOfToday.getTime()) / DAY_MS);
+    const overdue = !paid && daysUntilDue < 0;
+    items.push({
+      account: a, dueDate, daysUntilDue, overdue,
+      overdueByDays: overdue ? -daysUntilDue : 0,
+      amountDue: statement > 0 ? statement : owed,
+      minimumDue: a.minDue ?? 0,
+      autopay: !!a.autopay, paid,
+    });
+  }
+  const unpaid = items.filter((i) => !i.paid);
+  const overdue = unpaid.filter((i) => i.overdue).sort((a, b) => b.overdueByDays - a.overdueByDays);
+  const dueSoon = unpaid
+    .filter((i) => !i.overdue && i.daysUntilDue <= DUE_SOON_DAYS)
+    .sort((a, b) => a.daysUntilDue - b.daysUntilDue);
+  const later = unpaid
+    .filter((i) => !i.overdue && i.daysUntilDue > DUE_SOON_DAYS)
+    .sort((a, b) => a.daysUntilDue - b.daysUntilDue);
+  const sumMin = (arr: DueItem[]) => arr.reduce((s, i) => s + i.minimumDue, 0);
+  return {
+    overdue, dueSoon, later,
+    overdueMinDue: sumMin(overdue),
+    dueSoonMinDue: sumMin(dueSoon),
+    nextDue: overdue[0] ?? dueSoon[0] ?? later[0] ?? null,
+    hasAny: items.length > 0,
+  };
+}
+
 // ----- Installment loans (mortgage / auto / student) — the Loans page -----
 
 export type LoanRow = {

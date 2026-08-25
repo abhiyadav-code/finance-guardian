@@ -60,6 +60,7 @@ export type Account = {
   liabilityGroup?: LiabilityGroup | null; // legacy; bucket is auto-derived now
   notes?: string | null;
   payment?: number | null;          // current-cycle allocation (null = auto)
+  paymentDate?: string | null;      // ISO date a scheduled payment goes out
   payStatus?: PayStatus | null;
   // ----- 0%-APR promo (revolving) -----
   promoKind?: PromoKind | null;

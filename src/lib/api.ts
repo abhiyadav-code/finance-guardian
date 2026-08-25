@@ -68,6 +68,10 @@ export type Api = {
   deleteAccount: (id: string) => Promise<unknown>;
   accountHistory: (id: string) => Promise<{ history: { balance: number; at: string }[] }>;
   deleteCategory: (name: string) => Promise<unknown>;
+  ccPaymentsReport: () => Promise<{
+    payments: { month: string; total: number }[];
+    balances: { month: string; owed: number }[];
+  }>;
   config: () => Promise<{ instance: string; plaid: { configured: boolean; env: string } }>;
   plaidStatus: () => Promise<{ configured: boolean; env: string }>;
   plaidLinkToken: () => Promise<{ link_token: string }>;
@@ -100,6 +104,7 @@ const liveApi: Api = {
   deleteAccount: (id) => req("DELETE", `/accounts/${id}`),
   accountHistory: (id) => req("GET", `/accounts/${id}/history`),
   deleteCategory: (name) => req("DELETE", `/categories/${encodeURIComponent(name)}`),
+  ccPaymentsReport: () => req("GET", "/reports/cc-payments"),
 
   config: () => req("GET", "/config"),
 
@@ -146,6 +151,21 @@ const demoApi: Api = {
   deleteAccount: async () => ({ ok: true }),
   accountHistory: async () => ({ history: [] }),
   deleteCategory: async () => ({ ok: true }),
+  ccPaymentsReport: async () => {
+    // Six months of illustrative progress: balances trending down, steady payments.
+    const months: { month: string; total: number }[] = [];
+    const balances: { month: string; owed: number }[] = [];
+    const now = new Date();
+    const owedSeries = [34200, 32050, 30400, 29100, 27850, 26641];
+    const paySeries = [3900, 4250, 4600, 4400, 5050, 4975];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      months.push({ month: key, total: paySeries[5 - i] });
+      balances.push({ month: key, owed: owedSeries[5 - i] });
+    }
+    return { payments: months, balances };
+  },
   config: async () => ({ instance: "demo", plaid: { configured: false, env: "sandbox" } }),
   plaidStatus: async () => ({ configured: false, env: "sandbox" }),
   plaidLinkToken: async () => ({ link_token: "" }),

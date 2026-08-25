@@ -273,6 +273,8 @@ async function syncItem(item) {
         debtClass: mapped.type === "credit" ? "revolving" : "installment",
         creditLimit: a.balances?.limit ?? null,
       });
+      // Track credit-card balances over time for the pay-down progress chart.
+      if (mapped.type === "credit") store.recordAccountBalance(mapped.id, mapped.balance);
     }
   }
 

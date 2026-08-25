@@ -135,7 +135,11 @@ addColumnIfMissing("accounts", "nickname", "nickname TEXT");
 addColumnIfMissing("accounts", "is_manual", "is_manual INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("accounts", "balance_asof", "balance_asof TEXT");
 
-// Balance history so manual accounts (my529, etc.) can be tracked over time.
+// planned payment date (when a scheduled payment is due to go out)
+addColumnIfMissing("accounts", "payment_date", "payment_date TEXT");
+
+// Balance history so accounts can be tracked over time; payments ledger records
+// each credit-card payment made (for the monthly progress chart).
 db.exec(`
   CREATE TABLE IF NOT EXISTS account_balance_history (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,6 +148,15 @@ db.exec(`
     at      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_abh_account ON account_balance_history (account, at);
+
+  CREATE TABLE IF NOT EXISTS payments (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,
+    amount  REAL NOT NULL,
+    month   TEXT NOT NULL,   -- YYYY-MM (one payment per account per month)
+    at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_pay_month ON payments (month);
 `);
 
 // ----- Seed the built-in category taxonomy (always, all instances) -----
@@ -235,6 +248,7 @@ const toAccount = (r) => ({
   liabilityGroup: r.liability_group ?? null,
   notes: r.notes ?? null,
   payment: r.payment ?? null,
+  paymentDate: r.payment_date ?? null,
   payStatus: r.pay_status ?? null,
   debtClass: r.debt_class ?? null,
   promoKind: r.promo_kind ?? null,
@@ -340,6 +354,7 @@ const LIABILITY_COLUMNS = {
   liabilityGroup: "liability_group",
   notes: "notes",
   payment: "payment",
+  paymentDate: "payment_date",
   payStatus: "pay_status",
   debtClass: "debt_class",
   promoKind: "promo_kind",
@@ -362,6 +377,8 @@ const readOverrides = (id) => {
 // coerced to 0/1; unknown keys ignored. Edited Plaid-sourced fields are recorded
 // as overrides so syncs leave them alone.
 export function updateLiability(id, patch = {}) {
+  // Snapshot before the write so we can detect a transition into "paid".
+  const before = db.prepare("SELECT type, payment, min_due, pay_status FROM accounts WHERE id = ?").get(id);
   const sets = [];
   const vals = [];
   const overrides = readOverrides(id);
@@ -378,7 +395,70 @@ export function updateLiability(id, patch = {}) {
   vals.push([...overrides].join(","));
   vals.push(id);
   const r = db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+
+  // When a credit card flips to "paid", record the payment for the progress chart.
+  if (before && before.type === "credit" && patch.payStatus === "paid" && before.pay_status !== "paid") {
+    const amount = Math.max(0, patch.payment ?? before.payment ?? before.min_due ?? 0);
+    recordCcPayment(id, amount);
+  }
   return r.changes > 0;
+}
+
+// One credit-card payment per account per month (re-marking updates the amount).
+export function recordCcPayment(accountId, amount) {
+  const now = new Date();
+  const month = now.toISOString().slice(0, 7); // YYYY-MM
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM payments WHERE account = ? AND month = ?").run(accountId, month);
+    db.prepare("INSERT INTO payments (account, amount, month, at) VALUES (?, ?, ?, ?)")
+      .run(accountId, Number(amount) || 0, month, now.toISOString());
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+// Record a balance point (used by manual edits and Plaid credit-card syncs).
+export function recordAccountBalance(accountId, balance) {
+  recordBalance(accountId, Number(balance) || 0, new Date().toISOString());
+}
+
+// ----- Reports -----
+// Total credit-card payments per month (the "am I paying down cards" chart).
+export function getCcPaymentsByMonth() {
+  return db.prepare(
+    "SELECT month, ROUND(SUM(amount), 2) AS total FROM payments GROUP BY month ORDER BY month ASC"
+  ).all();
+}
+
+// Total credit-card balance owed per month, from balance history: for each month
+// take each credit account's last-known balance and sum the amounts owed.
+export function getCcBalanceByMonth() {
+  const rows = db.prepare(
+    `SELECT h.account AS account, substr(h.at, 1, 7) AS month, h.balance AS balance, h.at AS at
+     FROM account_balance_history h
+     JOIN accounts a ON a.id = h.account
+     WHERE a.type = 'credit'
+     ORDER BY h.at ASC`
+  ).all();
+  // last balance per (account, month)
+  const lastByMonth = new Map(); // month -> Map(account -> balance)
+  for (const r of rows) {
+    if (!lastByMonth.has(r.month)) lastByMonth.set(r.month, new Map());
+    lastByMonth.get(r.month).set(r.account, r.balance);
+  }
+  // carry forward each account's balance across months
+  const months = [...lastByMonth.keys()].sort();
+  const carry = new Map();
+  const out = [];
+  for (const m of months) {
+    for (const [acct, bal] of lastByMonth.get(m)) carry.set(acct, bal);
+    const owed = [...carry.values()].reduce((s, b) => s + Math.max(0, -b), 0);
+    out.push({ month: m, owed: Math.round(owed * 100) / 100 });
+  }
+  return out;
 }
 
 // Populate liability fields FROM Plaid on sync. Only sets fields the user hasn't

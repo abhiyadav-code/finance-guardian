@@ -120,6 +120,10 @@ Full setup and operations live in **[LOCAL_SETUP.md](./LOCAL_SETUP.md)**.
 - **Security:** access tokens are encrypted at rest (AES-256-GCM); your real financial data lives only in your local SQLite database.
 - **Setup:** add your Plaid Client ID + secret to `server/.env` — see [LOCAL_SETUP.md](./LOCAL_SETUP.md#plaid-setup-phase-2).
 
+### 🤖 Agent brief (read-only API)
+
+A single read-only endpoint — `GET /api/agent/brief` — returns what's **overdue** and **due soon** (amounts, due dates, minimums) so an assistant like a Daily Executive Brief agent can flag bills that need attention. It never exposes account numbers or tokens, and can be gated with a token. Full spec + a paste-in agent skill in **[AGENT.md](./AGENT.md)**.
+
 ### 🤖 AI (planned)
 
 Budget suggestions will be powered by the **Claude API** (Anthropic) — reading your recent spend to propose realistic per-category ceilings. This is the next milestone (see roadmap).

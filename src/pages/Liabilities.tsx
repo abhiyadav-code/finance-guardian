@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  Bar, ComposedChart, Line, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import {
   ArrowLeft, Wallet, CreditCard, AlertTriangle, Check, Clock, Circle,
-  Pencil, RefreshCw, Landmark, BadgePercent,
+  Pencil, RefreshCw, Landmark, BadgePercent, CalendarClock, TrendingDown, Bell,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Input } from "@/components/ui/input";
@@ -15,10 +18,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useFinanceStore, type Account } from "@/lib/finance-store";
-import { fmt, fmtCents, type DebtClass, type PayStatus, type PromoKind } from "@/lib/finance-data";
+import { fmt, fmtCents, accountLabel, type DebtClass, type PayStatus, type PromoKind } from "@/lib/finance-data";
 import {
-  deriveLiabilities, isPromoActive, type LiabilityRow, type LiabilityGroupView,
+  deriveLiabilities, deriveDueSchedule, isPromoActive,
+  type LiabilityRow, type LiabilityGroupView, type DueItem,
 } from "@/lib/derive";
+import { api, STATIC_DEMO } from "@/lib/api";
 import { toast } from "sonner";
 
 const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
@@ -43,30 +48,71 @@ const utilTone = (u: number | null) =>
   : u >= 0.3 ? "text-primary"
   : "text-success";
 
+// Only auto-refresh balances if the last sync is older than this (avoids
+// re-syncing on every navigation).
+const AUTO_SYNC_STALE_MS = 10 * 60 * 1000;
+
 const Liabilities = () => {
   const accounts = useFinanceStore((s) => s.accounts);
   const fundingSnapshot = useFinanceStore((s) => s.fundingSnapshot);
   const setFundingSnapshot = useFinanceStore((s) => s.setFundingSnapshot);
+  const sync = useFinanceStore((s) => s.sync);
 
-  const view = useMemo(
-    () => deriveLiabilities(accounts, fundingSnapshot),
-    [accounts, fundingSnapshot]
-  );
+  const view = useMemo(() => deriveLiabilities(accounts, fundingSnapshot), [accounts, fundingSnapshot]);
+  const due = useMemo(() => deriveDueSchedule(accounts), [accounts]);
+
+  const [syncing, setSyncing] = useState(false);
+  const autoTried = useRef(false);
+
+  const refresh = async (auto = false) => {
+    if (syncing || STATIC_DEMO) return;
+    setSyncing(true);
+    try {
+      await sync();
+      localStorage.setItem("fg:lastSync", String(Date.now()));
+      if (!auto) toast.success("Balances refreshed from your banks");
+    } catch (e) {
+      if (!auto) toast.error("Refresh failed", { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Auto-refresh once on load if balances are stale (and Plaid is live).
+  useEffect(() => {
+    if (autoTried.current || STATIC_DEMO) return;
+    autoTried.current = true;
+    const last = Number(localStorage.getItem("fg:lastSync") || 0);
+    if (Date.now() - last > AUTO_SYNC_STALE_MS) void refresh(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen">
       <TopBar />
 
       <main className="mx-auto max-w-7xl px-6 py-8 pb-28 md:px-10 md:py-10 md:pb-10">
-        <div>
-          <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-3 w-3" /> Dashboard
-          </Link>
-          <h1 className="font-display mt-2 text-4xl md:text-5xl">Liabilities</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Every card and loan in one place — balance, statement, and terms. Allocate this month's
-            payments from checking, mark them off, and see next month's balance to plan your draw.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <Link to="/" className="inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-3 w-3" /> Dashboard
+            </Link>
+            <h1 className="font-display mt-2 text-4xl md:text-5xl">Liabilities</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Every card and loan in one place. Refresh balances, tackle what's due, allocate payments
+              from checking, mark them off, and watch your card balances trend down.
+            </p>
+          </div>
+          {!STATIC_DEMO && (
+            <Button
+              onClick={() => refresh(false)}
+              disabled={syncing}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <RefreshCw className={`mr-1.5 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+              {syncing ? "Refreshing…" : "Refresh balances"}
+            </Button>
+          )}
         </div>
 
         {!view.hasLiabilities ? (
@@ -75,6 +121,8 @@ const Liabilities = () => {
           </div>
         ) : (
           <>
+            {due.hasAny && (due.overdue.length > 0 || due.dueSoon.length > 0) && <DuePanel due={due} />}
+
             <AllocationPanel view={view} onResnapshot={() => {
               setFundingSnapshot();
               toast.success("Checking snapshot refreshed");
@@ -87,12 +135,154 @@ const Liabilities = () => {
             </div>
 
             <GrandTotals view={view} />
+            <CcProgressChart />
           </>
         )}
       </main>
     </div>
   );
 };
+
+// ---------- Due / overdue priority pager ----------
+
+function daysLabel(item: DueItem) {
+  if (item.overdue) return `${item.overdueByDays}d overdue`;
+  if (item.daysUntilDue === 0) return "due today";
+  if (item.daysUntilDue === 1) return "due tomorrow";
+  return `in ${item.daysUntilDue}d`;
+}
+
+function DuePanel({ due }: { due: ReturnType<typeof deriveDueSchedule> }) {
+  const rows = [...due.overdue, ...due.dueSoon];
+  return (
+    <section className="panel mt-6 overflow-hidden p-0">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/40 px-6 py-3">
+        <div className="flex items-center gap-2">
+          <Bell className="h-4 w-4 text-primary" />
+          <h2 className="font-display text-lg">Needs attention</h2>
+        </div>
+        <div className="flex items-center gap-4 text-xs">
+          {due.overdue.length > 0 && (
+            <span className="inline-flex items-center gap-1 text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5" /> {due.overdue.length} overdue · {fmtCents(due.overdueMinDue)} min
+            </span>
+          )}
+          {due.dueSoon.length > 0 && (
+            <span className="inline-flex items-center gap-1 text-primary">
+              <Clock className="h-3.5 w-3.5" /> {due.dueSoon.length} due soon · {fmtCents(due.dueSoonMinDue)} min
+            </span>
+          )}
+        </div>
+      </header>
+      <ul className="divide-y divide-border">
+        {rows.map((item) => {
+          const a = item.account;
+          const tone = item.overdue ? "text-destructive" : item.daysUntilDue <= 3 ? "text-primary" : "text-muted-foreground";
+          return (
+            <li key={a.id} className="flex items-center justify-between gap-3 px-6 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className={`inline-flex h-2 w-2 shrink-0 rounded-full ${item.overdue ? "bg-destructive" : item.daysUntilDue <= 3 ? "bg-primary" : "bg-muted-foreground/40"}`} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">
+                    {accountLabel(a)}
+                    {a.autopay && <span className="ml-2 rounded-full bg-secondary px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">autopay</span>}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Due {item.dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · min {fmtCents(item.minimumDue)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 text-right">
+                <div>
+                  <p className="font-mono-fin text-sm tabular-nums">{fmtCents(item.amountDue)}</p>
+                  <p className={`text-[11px] font-medium ${tone}`}>{daysLabel(item)}</p>
+                </div>
+                <StatusPill
+                  status={a.payStatus ?? "unpaid"}
+                  onCycle={() => useFinanceStore.getState().updateLiability(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// ---------- Credit-card pay-down progress chart ----------
+
+function CcProgressChart() {
+  const [data, setData] = useState<{ month: string; paid: number; owed: number | null }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api.ccPaymentsReport().then((r) => {
+      if (!alive) return;
+      const byMonth = new Map<string, { month: string; paid: number; owed: number | null }>();
+      for (const p of r.payments) byMonth.set(p.month, { month: p.month, paid: p.total, owed: null });
+      for (const b of r.balances) {
+        const row = byMonth.get(b.month) ?? { month: b.month, paid: 0, owed: null };
+        row.owed = b.owed;
+        byMonth.set(b.month, row);
+      }
+      const rows = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month))
+        .map((r) => ({ ...r, label: monthLabel(r.month) }));
+      setData(rows as any);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  if (data.length < 2) return null;
+  const totalPaid = data.reduce((s, d) => s + (d.paid || 0), 0);
+
+  return (
+    <section className="panel mt-6 p-6 md:p-8">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Progress</p>
+          <h2 className="font-display mt-1 flex items-center gap-2 text-2xl">
+            <TrendingDown className="h-5 w-5 text-success" /> Credit-card pay-down
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            What you've paid toward cards each month, and where your total card balance is trending.
+          </p>
+        </div>
+        <p className="text-xs text-muted-foreground">Paid over this window · <span className="font-mono-fin text-foreground">{fmtCents(totalPaid)}</span></p>
+      </header>
+      <div className="h-[300px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 4" vertical={false} />
+            <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+            <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false}
+              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+            <Tooltip content={<ProgressTooltip />} />
+            <Bar dataKey="paid" name="Paid" fill="hsl(var(--success))" radius={[6, 6, 0, 0]} maxBarSize={44} />
+            <Line type="monotone" dataKey="owed" name="Balance owed" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  );
+}
+
+function monthLabel(ym: string) {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+}
+
+function ProgressTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const paid = payload.find((p: any) => p.dataKey === "paid")?.value;
+  const owed = payload.find((p: any) => p.dataKey === "owed")?.value;
+  return (
+    <div className="rounded-xl border border-border bg-popover p-3 text-xs shadow-soft">
+      <p className="font-medium">{label}</p>
+      {paid != null && <p className="mt-1 text-success">Paid {fmtCents(paid)}</p>}
+      {owed != null && <p className="text-primary">Balance {fmtCents(owed)}</p>}
+    </div>
+  );
+}
 
 // ---------- Allocation (funding) panel ----------
 
@@ -121,7 +311,7 @@ function AllocationPanel({
                 <SelectContent>
                   {cashAccounts.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
-                      {a.name} <span className="text-muted-foreground">{a.mask} · {fmtCents(a.balance)}</span>
+                      {accountLabel(a)} <span className="text-muted-foreground">{a.mask} · {fmtCents(a.balance)}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -269,8 +459,11 @@ function LiabilityTableRow({ row }: { row: LiabilityRow }) {
       <td className="px-3 py-2.5 text-right">
         <PaymentInput value={row.payment} auto={row.paymentAuto} onChange={(n) => update(a.id, { payment: n })} className="w-28" />
       </td>
-      <td className="px-3 py-2.5 text-center">
-        <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
+      <td className="px-3 py-2.5">
+        <div className="flex flex-col items-center gap-1">
+          <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
+          <ScheduleControl account={a} />
+        </div>
       </td>
       <td className="px-3 py-2.5 text-right font-mono-fin tabular-nums font-medium">{fmtCents(row.nextMonthOwed)}</td>
       <td className="px-3 py-2.5">
@@ -322,16 +515,19 @@ function LiabilityCard({ row }: { row: LiabilityRow }) {
         </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Pay</span>
-          <PaymentInput value={row.payment} auto={row.paymentAuto} onChange={(n) => update(a.id, { payment: n })} className="w-24" />
-          <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
+      <div className="mt-3 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Pay</span>
+            <PaymentInput value={row.payment} auto={row.paymentAuto} onChange={(n) => update(a.id, { payment: n })} className="w-24" />
+            <StatusPill status={a.payStatus ?? "unpaid"} onCycle={() => update(a.id, { payStatus: NEXT_STATUS[a.payStatus ?? "unpaid"] })} />
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Next mo.</p>
+            <p className="font-mono-fin text-sm font-medium tabular-nums">{fmtCents(row.nextMonthOwed)}</p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Next mo.</p>
-          <p className="font-mono-fin text-sm font-medium tabular-nums">{fmtCents(row.nextMonthOwed)}</p>
-        </div>
+        <div className="mt-2"><ScheduleControl account={a} /></div>
       </div>
 
       <NotesInput
@@ -385,7 +581,7 @@ function AccountIdentity({ account: a }: { account: Account }) {
       </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
-          <p className="truncate font-medium leading-tight">{a.name}</p>
+          <p className="truncate font-medium leading-tight">{accountLabel(a)}</p>
           {a.owner && (
             <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground ring-1 ring-border">
               {a.owner}
@@ -416,6 +612,48 @@ function StatusPill({ status, onCycle }: { status: PayStatus; onCycle: () => voi
     >
       <m.Icon className="h-3 w-3" /> {m.label}
     </button>
+  );
+}
+
+const shortDate = (ymd?: string | null) => {
+  if (!ymd) return "";
+  const [y, m, d] = ymd.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
+
+// Schedule a future payment date (marks the card "scheduled").
+function ScheduleControl({ account: a }: { account: Account }) {
+  const update = useFinanceStore((s) => s.updateLiability);
+  const [open, setOpen] = useState(false);
+  const date = a.paymentDate ? a.paymentDate.slice(0, 10) : "";
+  const setDate = (d: string) => {
+    update(a.id, {
+      paymentDate: d || null,
+      ...(d && a.payStatus !== "paid" ? { payStatus: "scheduled" as PayStatus } : {}),
+    });
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+            date ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+          title="Schedule a payment date"
+        >
+          <CalendarClock className="h-3 w-3" /> {date ? shortDate(a.paymentDate) : "Schedule"}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="center" className="w-auto p-3">
+        <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Pay date</label>
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 h-8 text-sm" />
+        {date && (
+          <button onClick={() => { setDate(""); setOpen(false); }} className="mt-2 block text-[11px] text-muted-foreground hover:text-foreground">
+            Clear date
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

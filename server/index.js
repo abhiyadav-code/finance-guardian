@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as store from "./db.js";
 import * as plaid from "./plaid.js";
+import { computeBrief } from "./brief.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8787;
@@ -125,6 +126,28 @@ api.delete("/accounts/:id", wrap((req, res) => {
 }));
 
 api.get("/accounts/:id/history", wrap((req, res) => res.json({ history: store.getAccountHistory(req.params.id) })));
+
+// ----- Reports -----
+api.get("/reports/cc-payments", wrap((_req, res) =>
+  res.json({ payments: store.getCcPaymentsByMonth(), balances: store.getCcBalanceByMonth() })
+));
+
+// ----- Agent brief (read-only) -----
+// A compact "what needs attention" feed for an assistant (e.g. a Daily Exec
+// brief agent). Optionally gate with FG_AGENT_TOKEN via ?token= or a
+// Bearer/X-Agent-Token header. Read-only; never exposes account numbers/tokens.
+const AGENT_TOKEN = process.env.FG_AGENT_TOKEN || "";
+function agentAuthorized(req) {
+  if (!AGENT_TOKEN) return true; // no token configured → open on localhost
+  const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const provided = req.query.token || req.headers["x-agent-token"] || bearer;
+  return provided === AGENT_TOKEN;
+}
+api.get("/agent/brief", wrap((req, res) => {
+  if (!agentAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
+  const { accounts } = store.getState();
+  res.json(computeBrief(accounts));
+}));
 
 api.post("/income/:id/toggle", wrap((req, res) => {
   store.toggleIncome(req.params.id);

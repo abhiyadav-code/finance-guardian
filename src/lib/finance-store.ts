@@ -57,6 +57,10 @@ type State = {
   setBudget: (category: Category, amount: number) => void;
   toggleIncome: (id: string) => void;
   setIncomeAmount: (id: string, amount: number) => void;
+  /** rename / reclassify a recurring income stream (persists across syncs) */
+  updateIncomeStream: (id: string, patch: { source?: string; kind?: IncomeStream["kind"] }) => void;
+  /** rename / recategorize a recurring bill (persists across syncs) */
+  updateOutflowStream: (id: string, patch: { name?: string; category?: string; kind?: OutflowStream["kind"] }) => void;
   /** patch liability fields on an account (Liabilities page) */
   updateLiability: (id: string, patch: LiabilityPatch) => void;
   /** freeze the checking snapshot; omit value to capture the live balance */
@@ -167,6 +171,14 @@ export const useFinanceStore = create<State>((set, get) => ({
     const amt = Math.max(0, Math.round(amount));
     set((s) => ({ income: s.income.map((i) => (i.id === id ? { ...i, amount: amt } : i)) }));
     persist(api.setIncomeAmount(id, amt), "setIncomeAmount");
+  },
+  updateIncomeStream: (id, patch) => {
+    set((s) => ({ income: s.income.map((i) => (i.id === id ? { ...i, ...patch } : i)) }));
+    persist(api.updateIncomeStream(id, patch), "updateIncomeStream");
+  },
+  updateOutflowStream: (id, patch) => {
+    set((s) => ({ outflows: s.outflows.map((o) => (o.id === id ? { ...o, ...patch } : o)) }));
+    persist(api.updateOutflowStream(id, patch), "updateOutflowStream");
   },
   updateLiability: (id, patch) => {
     set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)) }));

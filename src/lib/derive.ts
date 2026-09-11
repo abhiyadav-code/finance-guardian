@@ -424,7 +424,12 @@ export function deriveMonthlyForecast(
 
 // ----- Month drill-down: what's behind a forecast bar -----
 
-export type BreakdownItem = { name: string; amount: number; date?: string; tag?: string };
+export type BreakdownItem = {
+  name: string; amount: number; date?: string; tag?: string;
+  refType?: "income" | "outflow" | "transaction" | "budget" | "planned";
+  refId?: string;
+  category?: string;
+};
 export type BreakdownGroup = { category: string; amount: number; items: BreakdownItem[] };
 export type MonthBreakdown = { income: BreakdownGroup[]; expenses: BreakdownGroup[] };
 
@@ -461,20 +466,20 @@ export function monthBreakdown(
       const d = new Date(t.date);
       const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       if (k !== monthKey) continue;
-      if (t.amount > 0 && t.category !== "Transfer") push(inc, t.category || "Income", { name: t.merchant, amount: t.amount, date: t.date });
-      else if (isSpend(t)) push(exp, t.category || "Other", { name: t.merchant, amount: Math.abs(t.amount), date: t.date });
+      if (t.amount > 0 && t.category !== "Transfer") push(inc, t.category || "Income", { name: t.merchant, amount: t.amount, date: t.date, refType: "transaction", refId: t.id, category: t.category });
+      else if (isSpend(t)) push(exp, t.category || "Other", { name: t.merchant, amount: Math.abs(t.amount), date: t.date, refType: "transaction", refId: t.id, category: t.category });
     }
   } else {
     for (const s of income.filter((s) => s.active))
-      push(inc, `${cap((s.kind || "income").replace("_", " "))} (recurring)`, { name: s.source, amount: Math.round(monthlyEquivalent(s.amount, s.cadence)), tag: "recurring" });
+      push(inc, `${cap((s.kind || "income").replace("_", " "))} (recurring)`, { name: s.source, amount: Math.round(monthlyEquivalent(s.amount, s.cadence)), tag: "recurring", refType: "income", refId: s.id });
     for (const o of outflows)
-      push(exp, o.category || "Bills", { name: o.name, amount: Math.round(monthlyEquivalent(o.amount, o.cadence)), tag: "bill" });
-    for (const [cat, amt] of Object.entries(budgets)) if (amt > 0) push(exp, cat, { name: "Budget ceiling", amount: amt, tag: "budget" });
+      push(exp, o.category || "Bills", { name: o.name, amount: Math.round(monthlyEquivalent(o.amount, o.cadence)), tag: "bill", refType: "outflow", refId: o.id, category: o.category });
+    for (const [cat, amt] of Object.entries(budgets)) if (amt > 0) push(exp, cat, { name: "Budget ceiling", amount: amt, tag: "budget", refType: "budget" });
   }
   // Planned adjustments apply to both actual and projected months.
   for (const p of plannedItems) {
     if (monthKey < p.startMonth || monthKey > p.endMonth) continue;
-    push(p.kind === "income" ? inc : exp, p.category || "Planned", { name: p.name, amount: p.amount, tag: "planned" });
+    push(p.kind === "income" ? inc : exp, p.category || "Planned", { name: p.name, amount: p.amount, tag: "planned", refType: "planned", refId: p.id });
   }
   return { income: toArr(inc), expenses: toArr(exp) };
 }

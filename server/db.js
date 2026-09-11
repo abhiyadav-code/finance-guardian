@@ -138,6 +138,10 @@ addColumnIfMissing("accounts", "balance_asof", "balance_asof TEXT");
 // planned payment date (when a scheduled payment is due to go out)
 addColumnIfMissing("accounts", "payment_date", "payment_date TEXT");
 
+// user renamed/recategorized a recurring stream — freeze those fields on sync
+addColumnIfMissing("income_streams", "user_override", "user_override INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("outflow_streams", "user_override", "user_override INTEGER NOT NULL DEFAULT 0");
+
 // Balance history so accounts can be tracked over time; payments ledger records
 // each credit-card payment made (for the monthly progress chart).
 db.exec(`
@@ -445,6 +449,29 @@ export function toggleIncome(id) {
 
 export function setIncomeAmount(id, amount) {
   db.prepare("UPDATE income_streams SET amount = ? WHERE id = ?").run(Math.max(0, Math.round(amount)), id);
+}
+
+// Rename / reclassify a recurring income stream (sticks across Plaid syncs).
+export function updateIncomeStream(id, { source, kind } = {}) {
+  const sets = [], vals = [];
+  if (source !== undefined) { sets.push("source = ?"); vals.push(String(source).trim() || "Income"); }
+  if (kind !== undefined) { sets.push("kind = ?"); vals.push(kind); }
+  if (!sets.length) return false;
+  sets.push("user_override = 1");
+  vals.push(id);
+  return db.prepare(`UPDATE income_streams SET ${sets.join(", ")} WHERE id = ?`).run(...vals).changes > 0;
+}
+
+// Rename / recategorize a recurring bill (sticks across Plaid syncs).
+export function updateOutflowStream(id, { name, category, kind } = {}) {
+  const sets = [], vals = [];
+  if (name !== undefined) { sets.push("name = ?"); vals.push(String(name).trim() || "Bill"); }
+  if (category !== undefined) { sets.push("category = ?"); vals.push(category); }
+  if (kind !== undefined) { sets.push("kind = ?"); vals.push(kind); }
+  if (!sets.length) return false;
+  sets.push("user_override = 1");
+  vals.push(id);
+  return db.prepare(`UPDATE outflow_streams SET ${sets.join(", ")} WHERE id = ?`).run(...vals).changes > 0;
 }
 
 // ----- Liabilities: per-account debt fields + payment cycle -----
@@ -803,8 +830,10 @@ export function upsertIncomeStream(s) {
     `INSERT INTO income_streams (id, source, amount, cadence, next_date, kind, active)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       source = excluded.source, amount = excluded.amount, cadence = excluded.cadence,
-       next_date = excluded.next_date, kind = excluded.kind`
+       amount = excluded.amount, cadence = excluded.cadence, next_date = excluded.next_date,
+       -- keep the user's rename/reclassification across syncs
+       source = CASE WHEN income_streams.user_override = 1 THEN income_streams.source ELSE excluded.source END,
+       kind   = CASE WHEN income_streams.user_override = 1 THEN income_streams.kind   ELSE excluded.kind   END`
   ).run(s.id, s.source, s.amount, s.cadence, s.nextDate, s.kind, s.active ? 1 : 0);
 }
 
@@ -813,8 +842,11 @@ export function upsertOutflowStream(s) {
     `INSERT INTO outflow_streams (id, name, amount, cadence, next_date, category, kind)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       name = excluded.name, amount = excluded.amount, cadence = excluded.cadence,
-       next_date = excluded.next_date, category = excluded.category, kind = excluded.kind`
+       amount = excluded.amount, cadence = excluded.cadence, next_date = excluded.next_date,
+       -- keep the user's rename/recategorization across syncs
+       name     = CASE WHEN outflow_streams.user_override = 1 THEN outflow_streams.name     ELSE excluded.name     END,
+       category = CASE WHEN outflow_streams.user_override = 1 THEN outflow_streams.category ELSE excluded.category END,
+       kind     = CASE WHEN outflow_streams.user_override = 1 THEN outflow_streams.kind     ELSE excluded.kind     END`
   ).run(s.id, s.name, s.amount, s.cadence, s.nextDate, s.category, s.kind);
 }
 

@@ -21,6 +21,9 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -31,7 +34,7 @@ import {
   buildProjection,
   type IncomeStream, type OutflowStream, type Cadence, type PlannedItem,
 } from "@/lib/cashflow-data";
-import { deriveMonthlyForecast, monthBreakdown, type Forecast, type MonthBreakdown } from "@/lib/derive";
+import { deriveMonthlyForecast, monthBreakdown, type Forecast, type MonthBreakdown, type BreakdownGroup, type BreakdownItem } from "@/lib/derive";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -485,7 +488,7 @@ function ForecastDrawer({ target, forecast, onClose }: { target: DrawerTarget; f
   );
 }
 
-function BreakdownBlock({ title, tone, total, groups, showDates }: { title: string; tone: "success" | "destructive"; total: number; groups: { category: string; amount: number; items: { name: string; amount: number; date?: string; tag?: string }[] }[]; showDates?: boolean }) {
+function BreakdownBlock({ title, tone, total, groups, showDates }: { title: string; tone: "success" | "destructive"; total: number; groups: BreakdownGroup[]; showDates?: boolean }) {
   const tint = tone === "success" ? "text-success" : "text-destructive";
   return (
     <div>
@@ -507,22 +510,103 @@ function BreakdownBlock({ title, tone, total, groups, showDates }: { title: stri
                 <span className="font-mono-fin tabular-nums">{fmtCents(g.amount)}</span>
               </summary>
               <ul className="border-t border-border bg-background/40 px-3 py-1.5">
-                {g.items.map((it, i) => (
-                  <li key={i} className="flex items-center justify-between gap-3 py-1 text-xs">
-                    <span className="min-w-0 truncate text-muted-foreground">
-                      {it.name}
-                      {showDates && it.date ? <span className="ml-1.5 text-[10px] opacity-60">{new Date(it.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span> : null}
-                      {it.tag ? <span className="ml-1.5 rounded bg-secondary px-1 text-[9px] uppercase tracking-wider">{it.tag}</span> : null}
-                    </span>
-                    <span className="font-mono-fin shrink-0 tabular-nums">{fmtCents(it.amount)}</span>
-                  </li>
-                ))}
+                {g.items.map((it, i) => <ItemRow key={it.refId ?? i} item={it} showDate={showDates} />)}
               </ul>
             </details>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+const INCOME_KINDS: { value: string; label: string }[] = [
+  { value: "paycheck", label: "Paycheck" }, { value: "freelance", label: "Freelance" },
+  { value: "dividend", label: "Dividend / interest" }, { value: "unemployment", label: "Unemployment" },
+  { value: "other", label: "Other" },
+];
+
+// A single line item in the drawer, editable in place when it maps to a stream
+// or transaction (rename + recategorize — persists as a rule across syncs).
+function ItemRow({ item, showDate }: { item: BreakdownItem; showDate?: boolean }) {
+  const categories = useFinanceStore((s) => s.categories);
+  const updateIncomeStream = useFinanceStore((s) => s.updateIncomeStream);
+  const updateOutflowStream = useFinanceStore((s) => s.updateOutflowStream);
+  const recategorize = useFinanceStore((s) => s.recategorize);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(item.name);
+  const [cat, setCat] = useState(item.category ?? "");
+  const [kind, setKind] = useState("keep");
+  const editable = (item.refType === "income" || item.refType === "outflow" || item.refType === "transaction") && !!item.refId;
+
+  const save = () => {
+    if (item.refType === "income") updateIncomeStream(item.refId!, { source: name, ...(kind !== "keep" ? { kind: kind as any } : {}) });
+    else if (item.refType === "outflow") updateOutflowStream(item.refId!, { name, ...(cat ? { category: cat } : {}) });
+    else if (item.refType === "transaction" && cat) recategorize(item.refId!, cat);
+    setOpen(false);
+    toast.success("Updated");
+  };
+
+  return (
+    <li className="flex items-center justify-between gap-2 py-1 text-xs">
+      <span className="min-w-0 truncate text-muted-foreground">
+        {item.name}
+        {showDate && item.date ? <span className="ml-1.5 text-[10px] opacity-60">{new Date(item.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span> : null}
+        {item.tag ? <span className="ml-1.5 rounded bg-secondary px-1 text-[9px] uppercase tracking-wider">{item.tag}</span> : null}
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5">
+        <span className="font-mono-fin tabular-nums">{fmtCents(item.amount)}</span>
+        {editable && (
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+              <button className="text-muted-foreground/50 transition-colors hover:text-foreground" title="Rename / recategorize">
+                <Pencil className="h-3 w-3" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-64 p-3">
+              <p className="mb-2 text-[11px] text-muted-foreground">
+                {item.refType === "transaction" ? "Recategorize this transaction." : "Rename & recategorize — sticks across syncs."}
+              </p>
+              <div className="space-y-2.5">
+                {item.refType !== "transaction" && (
+                  <div>
+                    <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-8 text-sm" />
+                  </div>
+                )}
+                {item.refType === "income" ? (
+                  <div>
+                    <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Type</label>
+                    <Select value={kind} onValueChange={setKind}>
+                      <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="keep">— keep current —</SelectItem>
+                        {INCOME_KINDS.map((k) => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</label>
+                    <Select value={cat || "none"} onValueChange={(v) => setCat(v === "none" ? "" : v)}>
+                      <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Choose" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">— keep current —</SelectItem>
+                        {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setOpen(false)} className="text-muted-foreground">Cancel</Button>
+                <Button size="sm" onClick={save} className="bg-primary text-primary-foreground hover:bg-primary/90">Save</Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </span>
+    </li>
   );
 }
 

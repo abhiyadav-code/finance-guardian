@@ -200,6 +200,16 @@ api.post("/income/:id/amount", wrap((req, res) => {
   ok(res);
 }));
 
+// Rename / reclassify a recurring income or bill stream (persists across syncs)
+api.patch("/income/:id", wrap((req, res) => {
+  if (!store.updateIncomeStream(req.params.id, req.body ?? {})) return res.status(404).json({ error: "stream not found" });
+  ok(res);
+}));
+api.patch("/outflows/:id", wrap((req, res) => {
+  if (!store.updateOutflowStream(req.params.id, req.body ?? {})) return res.status(404).json({ error: "stream not found" });
+  ok(res);
+}));
+
 // ----- Liabilities -----
 api.patch("/accounts/:id/liability", wrap((req, res) => {
   const patch = req.body ?? {};

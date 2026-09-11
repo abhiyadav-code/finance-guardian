@@ -91,8 +91,9 @@ const CashFlow = () => {
       income, outflows,
       discretionaryByCategory: budgets,
       days,
+      planned: plannedItems,
     }),
-    [startingCash, income, outflows, budgets, days]
+    [startingCash, income, outflows, budgets, days, plannedItems]
   );
 
   const last = projection[projection.length - 1];

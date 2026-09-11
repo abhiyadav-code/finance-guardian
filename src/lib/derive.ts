@@ -245,7 +245,7 @@ export function deriveLiabilities(
   };
 
   const groups: LiabilityGroupView[] = LIABILITY_GROUP_ORDER.map((group) => {
-    const rows = liabilities.filter((a) => groupOf(a) === group).map(toRow);
+    const rows = liabilities.filter((a) => groupOf(a) === group).map(toRow).sort((a, b) => b.owed - a.owed);
     const sum = (pick: (r: LiabilityRow) => number) => rows.reduce((s, r) => s + pick(r), 0);
     return {
       group,

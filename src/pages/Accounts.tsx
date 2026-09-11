@@ -34,8 +34,23 @@ const asOf = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
 
 const Accounts = () => {
-  const accounts = useFinanceStore((s) => s.accounts);
+  const allAccounts = useFinanceStore((s) => s.accounts);
   const [addOpen, setAddOpen] = useState(false);
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
+
+  // Distinct owners present, for the filter chips.
+  const owners = useMemo(() => {
+    const set = new Set<string>();
+    let anyUnassigned = false;
+    for (const a of allAccounts) { if (a.owner && a.owner.trim()) set.add(a.owner.trim()); else anyUnassigned = true; }
+    return { list: [...set].sort(), anyUnassigned };
+  }, [allAccounts]);
+
+  const accounts = useMemo(
+    () => (ownerFilter === "all" ? allAccounts
+      : allAccounts.filter((a) => (a.owner?.trim() || "Unassigned") === ownerFilter)),
+    [allAccounts, ownerFilter]
+  );
 
   const totals = useMemo(() => {
     const assets = accounts.filter((a) => ["checking", "savings", "investment"].includes(a.type)).reduce((t, a) => t + a.balance, 0);
@@ -46,6 +61,18 @@ const Accounts = () => {
   const groups = TYPE_ORDER
     .map((type) => ({ type, items: accounts.filter((a) => a.type === type) }))
     .filter((g) => g.items.length > 0);
+
+  const chip = (val: string, label: string) => (
+    <button
+      key={val}
+      onClick={() => setOwnerFilter(val)}
+      className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+        ownerFilter === val ? "bg-primary text-primary-foreground" : "border border-border bg-card text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="min-h-screen">
@@ -67,11 +94,21 @@ const Accounts = () => {
           </Button>
         </div>
 
+        {/* Owner filter */}
+        {(owners.list.length > 0 || owners.anyUnassigned) && (
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Owner</span>
+            {chip("all", "All")}
+            {owners.list.map((o) => chip(o, o))}
+            {owners.anyUnassigned && chip("Unassigned", "Unassigned")}
+          </div>
+        )}
+
         {/* Snapshot */}
-        <section className="panel mt-6 grid gap-3 p-6 sm:grid-cols-3 md:p-8">
+        <section className="panel mt-4 grid gap-3 p-6 sm:grid-cols-3 md:p-8">
           <Snap label="Assets" value={fmt(totals.assets)} tone="text-foreground" />
           <Snap label="Debt" value={fmt(totals.debt)} tone="text-destructive" />
-          <Snap label="Net worth" value={fmt(totals.net)} tone={totals.net >= 0 ? "text-success" : "text-destructive"} />
+          <Snap label={ownerFilter === "all" ? "Net worth" : `Net worth · ${ownerFilter}`} value={fmt(totals.net)} tone={totals.net >= 0 ? "text-success" : "text-destructive"} />
         </section>
 
         <div className="mt-8 space-y-8">
@@ -123,6 +160,11 @@ function AccountRow({ account: a }: { account: Account }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <p className="truncate font-medium leading-tight">{accountLabel(a)}</p>
+            {a.owner && (
+              <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground ring-1 ring-border">
+                {a.owner}
+              </span>
+            )}
             {a.isManual && (
               <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary ring-1 ring-primary/30">
                 Manual
@@ -181,16 +223,25 @@ function EditAccount({ account: a }: { account: Account }) {
   const setNickname = useFinanceStore((s) => s.setNickname);
   const setAccountType = useFinanceStore((s) => s.setAccountType);
   const setManualBalance = useFinanceStore((s) => s.setManualBalance);
+  const updateLiability = useFinanceStore((s) => s.updateLiability);
   const removeAccount = useFinanceStore((s) => s.removeAccount);
   const [open, setOpen] = useState(false);
   const [nick, setNick] = useState(a.nickname ?? "");
   const [type, setType] = useState<AccountType>(a.type);
   const [bal, setBal] = useState(String(a.balance));
+  const [owner, setOwner] = useState(a.owner ?? "");
+  const [promoUntil, setPromoUntil] = useState((a.promoAprUntil ?? "").slice(0, 10));
+  const isDebt = type === "credit" || type === "loan";
 
   const save = () => {
     if ((nick.trim() || null) !== (a.nickname ?? null)) setNickname(a.id, nick);
     if (type !== a.type) setAccountType(a.id, type);
     if (a.isManual && Number(bal) !== a.balance) setManualBalance(a.id, Number(bal) || 0);
+    if ((owner.trim() || null) !== (a.owner ?? null)) updateLiability(a.id, { owner: owner.trim() || null });
+    const pu = promoUntil || null;
+    if (isDebt && pu !== ((a.promoAprUntil ?? "").slice(0, 10) || null)) {
+      updateLiability(a.id, { promoAprUntil: pu, promoKind: pu ? (a.promoKind ?? "purchase") : null });
+    }
     setOpen(false);
     toast.success(`Updated ${nick.trim() || a.name}`);
   };
@@ -220,6 +271,9 @@ function EditAccount({ account: a }: { account: Account }) {
           <Field label="Nickname">
             <Input value={nick} onChange={(e) => setNick(e.target.value)} placeholder={a.name} className="h-8 text-sm" />
           </Field>
+          <Field label="Owner">
+            <Input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Abhi / Rachana / Joint" className="h-8 text-sm" />
+          </Field>
           <Field label="Type">
             <Select value={type} onValueChange={(v) => setType(v as AccountType)}>
               <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
@@ -228,6 +282,12 @@ function EditAccount({ account: a }: { account: Account }) {
               </SelectContent>
             </Select>
           </Field>
+          {isDebt && (
+            <Field label="0% APR until (optional)">
+              <Input type="date" value={promoUntil} onChange={(e) => setPromoUntil(e.target.value)} className="h-8 text-sm" />
+              <p className="mt-1 text-[10px] text-muted-foreground">Sets it as 0%-promo debt — it moves to the "Deferred · 0%" group and only the minimum is due.</p>
+            </Field>
+          )}
           {a.isManual ? (
             <Field label="Balance">
               <Input type="number" value={bal} onChange={(e) => setBal(e.target.value)} className="h-8 text-sm" />

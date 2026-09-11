@@ -121,10 +121,12 @@ export type ProjectionInput = {
   /** Monthly discretionary spend per category, distributed evenly across days */
   discretionaryByCategory: Record<string, number>;
   days: number;
+  /** forward one-off / seasonal adjustments (applied on the 1st of each month in range) */
+  planned?: PlannedItem[];
 };
 
 export function buildProjection({
-  startingCash, income, outflows, discretionaryByCategory, days,
+  startingCash, income, outflows, discretionaryByCategory, days, planned = [],
 }: ProjectionInput): ProjectionPoint[] {
   const from = new Date();
   from.setHours(0, 0, 0, 0);
@@ -153,6 +155,22 @@ export function buildProjection({
       const arr = events.get(k) ?? [];
       arr.push({ amount: o.amount, name: o.name, kind: "out" });
       events.set(k, arr);
+    }
+  }
+  // Planned adjustments: hit on the 1st of each month within [startMonth, endMonth]
+  // that falls inside the projection window (so what-ifs show up here too).
+  for (const p of planned) {
+    let [y, m] = p.startMonth.split("-").map(Number);
+    const [ey, em] = p.endMonth.split("-").map(Number);
+    while (y < ey || (y === ey && m <= em)) {
+      const d = new Date(y, m - 1, 1);
+      if (d >= from && d <= to) {
+        const k = d.toISOString().slice(0, 10);
+        const arr = events.get(k) ?? [];
+        arr.push({ amount: p.amount, name: p.name, kind: p.kind === "income" ? "in" : "out" });
+        events.set(k, arr);
+      }
+      m++; if (m > 12) { m = 1; y++; }
     }
   }
 

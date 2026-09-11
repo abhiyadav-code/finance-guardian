@@ -422,6 +422,63 @@ export function deriveMonthlyForecast(
   };
 }
 
+// ----- Month drill-down: what's behind a forecast bar -----
+
+export type BreakdownItem = { name: string; amount: number; date?: string; tag?: string };
+export type BreakdownGroup = { category: string; amount: number; items: BreakdownItem[] };
+export type MonthBreakdown = { income: BreakdownGroup[]; expenses: BreakdownGroup[] };
+
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/**
+ * The line items behind a single forecast month, grouped by category. For a
+ * past (actual) month these are the real transactions; for a projected month
+ * they're the recurring income/bills + budget ceilings + planned adjustments —
+ * so the totals reconcile with the chart and you can see exactly what's counted.
+ */
+export function monthBreakdown(
+  monthKey: string,
+  actual: boolean,
+  transactions: Transaction[],
+  income: IncomeStream[],
+  outflows: OutflowStream[],
+  budgets: Record<string, number>,
+  plannedItems: PlannedItem[]
+): MonthBreakdown {
+  const inc = new Map<string, BreakdownItem[]>();
+  const exp = new Map<string, BreakdownItem[]>();
+  const push = (m: Map<string, BreakdownItem[]>, cat: string, it: BreakdownItem) => {
+    if (!m.has(cat)) m.set(cat, []);
+    m.get(cat)!.push(it);
+  };
+  const toArr = (m: Map<string, BreakdownItem[]>): BreakdownGroup[] =>
+    [...m.entries()]
+      .map(([category, items]) => ({ category, amount: items.reduce((s, i) => s + i.amount, 0), items: items.sort((a, b) => b.amount - a.amount) }))
+      .sort((a, b) => b.amount - a.amount);
+
+  if (actual) {
+    for (const t of transactions) {
+      const d = new Date(t.date);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (k !== monthKey) continue;
+      if (t.amount > 0 && t.category !== "Transfer") push(inc, t.category || "Income", { name: t.merchant, amount: t.amount, date: t.date });
+      else if (isSpend(t)) push(exp, t.category || "Other", { name: t.merchant, amount: Math.abs(t.amount), date: t.date });
+    }
+  } else {
+    for (const s of income.filter((s) => s.active))
+      push(inc, `${cap((s.kind || "income").replace("_", " "))} (recurring)`, { name: s.source, amount: Math.round(monthlyEquivalent(s.amount, s.cadence)), tag: "recurring" });
+    for (const o of outflows)
+      push(exp, o.category || "Bills", { name: o.name, amount: Math.round(monthlyEquivalent(o.amount, o.cadence)), tag: "bill" });
+    for (const [cat, amt] of Object.entries(budgets)) if (amt > 0) push(exp, cat, { name: "Budget ceiling", amount: amt, tag: "budget" });
+  }
+  // Planned adjustments apply to both actual and projected months.
+  for (const p of plannedItems) {
+    if (monthKey < p.startMonth || monthKey > p.endMonth) continue;
+    push(p.kind === "income" ? inc : exp, p.category || "Planned", { name: p.name, amount: p.amount, tag: "planned" });
+  }
+  return { income: toArr(inc), expenses: toArr(exp) };
+}
+
 // ----- Bill due dates: what's overdue / due soon (priority pager) -----
 
 const DAY_MS = 86_400_000;

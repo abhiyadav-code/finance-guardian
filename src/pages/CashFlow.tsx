@@ -8,6 +8,7 @@ import {
   ArrowLeft, ArrowDownRight, ArrowUpRight, Wallet, Briefcase, Banknote,
   Repeat, CreditCard, Home, Zap, Car, Sparkles, AlertTriangle,
   Wand2, Check, Loader2, TrendingUp, TrendingDown, Minus, Plus, Trash2, Pencil,
+  Info, ChevronDown,
 } from "lucide-react";
 import { TopBar } from "@/components/finance/TopBar";
 import { Slider } from "@/components/ui/slider";
@@ -17,25 +18,28 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useFinanceStore } from "@/lib/finance-store";
-import { fmt, fmtCents, type Transaction, type Category } from "@/lib/finance-data";
+import { fmt, fmtCents, accountLabel, type Transaction, type Category } from "@/lib/finance-data";
 import {
   buildProjection,
   type IncomeStream, type OutflowStream, type Cadence, type PlannedItem,
 } from "@/lib/cashflow-data";
-import { deriveMonthlyForecast, type Forecast } from "@/lib/derive";
+import { deriveMonthlyForecast, monthBreakdown, type Forecast, type MonthBreakdown } from "@/lib/derive";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
 const HORIZONS: { label: string; days: number }[] = [
   { label: "30d", days: 30 },
-  { label: "60d", days: 60 },
   { label: "90d", days: 90 },
   { label: "6mo", days: 182 },
+  { label: "1yr", days: 365 },
 ];
 
 const cadenceLabel = { weekly: "/wk", biweekly: "/2wk", semimonthly: "/2×mo", monthly: "/mo", quarterly: "/qtr", annually: "/yr" } as const;
@@ -73,7 +77,7 @@ const CashFlow = () => {
     [accounts, transactions, income, outflows, budgets, plannedItems]
   );
 
-  const [days, setDays] = useState(60);
+  const [days, setDays] = useState(90);
 
   // Cash on hand = liquid (checking + savings)
   const startingCash = useMemo(
@@ -271,11 +275,21 @@ const monthName = (ym: string) => {
 const monthRangeLabel = (start: string, end: string) =>
   start === end ? monthName(start) : `${monthName(start).split(" ")[0]}–${monthName(end)}`;
 
+type DrawerTarget =
+  | null
+  | { type: "month"; key: string; label: string; actual: boolean }
+  | { type: "metric"; which: "cash" | "ratio" | "lowpoint" | "investments" };
+
 function ForecastSection({ forecast: f }: { forecast: Forecast }) {
   const ratioPct = Math.round(f.expenseToIncome * 100);
   const now = new Date();
   const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const nowLabel = f.months.find((m) => m.key === nowKey)?.label;
+  const [drawer, setDrawer] = useState<DrawerTarget>(null);
+  const openMonthByLabel = (label?: string) => {
+    const m = label && f.months.find((x) => x.label === label);
+    if (m) setDrawer({ type: "month", key: m.key, label: m.label, actual: m.actual });
+  };
   return (
     <section className="panel p-6 md:p-8">
       <header>
@@ -283,17 +297,17 @@ function ForecastSection({ forecast: f }: { forecast: Forecast }) {
         <h2 className="font-display mt-1 text-2xl">12-month cash-flow forecast</h2>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           Actuals for months that have passed, projections ahead — including recurring income &amp; bills,
-          category budgets, and your planned adjustments.
+          category budgets, and your planned adjustments. <span className="text-foreground/70">Click any month, or the ⓘ on a figure, to see what's behind it.</span>
         </p>
       </header>
 
       <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <FKpi label="Cash on hand" value={fmt(f.startCash)} tone="neutral" sub="checking + savings" />
+        <FKpi label="Cash on hand" value={fmt(f.startCash)} tone="neutral" sub="checking + savings" onInfo={() => setDrawer({ type: "metric", which: "cash" })} />
         <FKpi label="Expense : income" value={`${ratioPct}%`} tone={ratioPct <= 100 ? "up" : "alert"}
-          sub={ratioPct <= 100 ? "within income" : "over income"} />
+          sub={ratioPct <= 100 ? "within income" : "over income"} onInfo={() => setDrawer({ type: "metric", which: "ratio" })} />
         <FKpi label="Low point" value={f.lowest ? fmt(f.lowest.value) : "—"} tone={f.dipsBelowZero ? "alert" : "neutral"}
-          sub={f.lowest?.label ?? ""} />
-        <FKpi label="Investments to draw" value={fmt(f.liquidatable)} tone="neutral" sub="if you must liquidate" />
+          sub={f.lowest?.label ?? ""} onInfo={() => setDrawer({ type: "metric", which: "lowpoint" })} />
+        <FKpi label="Investments to draw" value={fmt(f.liquidatable)} tone="neutral" sub="if you must liquidate" onInfo={() => setDrawer({ type: "metric", which: "investments" })} />
       </div>
 
       {f.dipsBelowZero && (
@@ -306,9 +320,10 @@ function ForecastSection({ forecast: f }: { forecast: Forecast }) {
         </div>
       )}
 
-      <div className="mt-5 h-[340px] w-full">
+      <div className="mt-5 h-[340px] w-full cursor-pointer">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={f.months} margin={{ left: 0, right: 0, top: 8, bottom: 0 }}>
+          <ComposedChart data={f.months} margin={{ left: 0, right: 0, top: 8, bottom: 0 }}
+            onClick={(s: any) => openMonthByLabel(s?.activeLabel)}>
             <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 4" vertical={false} />
             <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
             {/* left: monthly flows (income/expenses/net) */}
@@ -334,17 +349,204 @@ function ForecastSection({ forecast: f }: { forecast: Forecast }) {
         Bars: income vs. expenses each month · amber line: net (left axis) · dashed line: projected cash balance
         (right axis, forward only). The dotted marker is this month; left of it is actuals where we have history.
       </p>
+
+      <ForecastDrawer target={drawer} forecast={f} onClose={() => setDrawer(null)} />
     </section>
   );
 }
 
-function FKpi({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone: "up" | "alert" | "neutral" }) {
+function FKpi({ label, value, sub, tone, onInfo }: { label: string; value: string; sub?: string; tone: "up" | "alert" | "neutral"; onInfo?: () => void }) {
   const tint = tone === "up" ? "text-success" : tone === "alert" ? "text-destructive" : "text-foreground";
   return (
-    <div className="rounded-xl border border-border bg-background/40 p-4">
+    <div className="relative rounded-xl border border-border bg-background/40 p-4">
+      {onInfo && (
+        <button onClick={onInfo} title="What is this?" className="absolute right-2.5 top-2.5 text-muted-foreground/60 transition-colors hover:text-foreground">
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      )}
       <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
       <p className={`font-mono-fin mt-1.5 text-xl tabular-nums ${tint}`}>{value}</p>
       {sub && <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+// Slide-out detail: what's behind a forecast month, or what a KPI means.
+function ForecastDrawer({ target, forecast, onClose }: { target: DrawerTarget; forecast: Forecast; onClose: () => void }) {
+  const accounts = useFinanceStore((s) => s.accounts);
+  const transactions = useFinanceStore((s) => s.transactions);
+  const income = useFinanceStore((s) => s.income);
+  const outflows = useFinanceStore((s) => s.outflows);
+  const budgets = useFinanceStore((s) => s.budgets);
+  const plannedItems = useFinanceStore((s) => s.plannedItems);
+
+  const bd: MonthBreakdown | null = useMemo(
+    () => (target?.type === "month" ? monthBreakdown(target.key, target.actual, transactions, income, outflows, budgets, plannedItems) : null),
+    [target, transactions, income, outflows, budgets, plannedItems]
+  );
+
+  const open = !!target;
+  let title = "", desc = "", body: React.ReactNode = null;
+
+  if (target?.type === "month" && bd) {
+    const mLabel = new Date(target.key + "-01").toLocaleDateString("en-US", { month: "long", year: "numeric" });
+    title = mLabel;
+    desc = target.actual ? "Actuals from your transactions this month." : "Projected from recurring income, bills, budgets, and planned adjustments.";
+    const incTotal = bd.income.reduce((s, g) => s + g.amount, 0);
+    const expTotal = bd.expenses.reduce((s, g) => s + g.amount, 0);
+    body = (
+      <div className="space-y-6">
+        <BreakdownBlock title="Money in" tone="success" total={incTotal} groups={bd.income} showDates={target.actual} />
+        <BreakdownBlock title="Money out" tone="destructive" total={expTotal} groups={bd.expenses} showDates={target.actual} />
+        <div className="rounded-lg border border-border bg-background/40 p-3 text-sm">
+          <div className="flex items-center justify-between"><span className="text-muted-foreground">Net this month</span>
+            <span className={`font-mono-fin ${incTotal - expTotal >= 0 ? "text-success" : "text-destructive"}`}>{incTotal - expTotal >= 0 ? "+" : "−"}{fmtCents(Math.abs(incTotal - expTotal))}</span></div>
+        </div>
+        {!target.actual && (
+          <p className="text-[11px] text-muted-foreground">
+            Projected months use your recurring streams + category budgets + planned adjustments. Connect more accounts or
+            adjust budgets to refine them. Expenses look low? It usually means budgets aren't set for every category yet.
+          </p>
+        )}
+      </div>
+    );
+  } else if (target?.type === "metric") {
+    const w = target.which;
+    if (w === "cash") {
+      title = "Cash on hand";
+      desc = "Money you can spend right now.";
+      const cash = accounts.filter((a) => a.type === "checking" || a.type === "savings");
+      body = (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">The sum of your <span className="text-foreground">checking + savings</span> balances. It excludes investments, credit, and loans.</p>
+          <AccountList accounts={cash} total={forecast.startCash} />
+        </div>
+      );
+    } else if (w === "ratio") {
+      title = "Expense : income ratio";
+      desc = "Are you living within your income?";
+      body = (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">Total expenses ÷ total income across the 13-month window. <span className="text-foreground">Under 100%</span> means you're spending less than you earn.</p>
+          <div className="rounded-lg border border-border bg-background/40 p-4 text-sm">
+            <Row label="Total income (13 mo)" value={fmt(forecast.totalIncome)} tone="success" />
+            <Row label="Total expenses (13 mo)" value={fmt(forecast.totalExpenses)} tone="destructive" />
+            <div className="my-2 border-t border-border" />
+            <Row label="Ratio" value={`${Math.round(forecast.expenseToIncome * 100)}%`} tone={forecast.expenseToIncome <= 1 ? "success" : "destructive"} />
+          </div>
+        </div>
+      );
+    } else if (w === "lowpoint") {
+      title = "Low point";
+      desc = "Your tightest cash month ahead.";
+      body = (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The lowest your <span className="text-foreground">projected cash balance</span> (checking + savings) reaches over the year — <span className="text-foreground">not an expense</span>.
+            It's the running balance after each month's income and bills net out, starting from today's {fmt(forecast.startCash)}.
+          </p>
+          {forecast.lowest && (
+            <div className="rounded-lg border border-border bg-background/40 p-4 text-sm">
+              <Row label="Lowest balance" value={fmt(forecast.lowest.value)} tone={forecast.dipsBelowZero ? "destructive" : "neutral"} />
+              <Row label="When" value={forecast.lowest.label} tone="neutral" />
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">If it dips below zero, plan a transfer or sell some investments before that month.</p>
+        </div>
+      );
+    } else {
+      title = "Investments to draw";
+      desc = "Your backstop if cash runs short.";
+      const inv = accounts.filter((a) => a.type === "investment");
+      body = (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The total value of your <span className="text-foreground">investment accounts</span> you could sell (liquidate) to cover a shortfall — brokerage, 401(k), RSUs, crypto, etc.
+            It's a <span className="text-foreground">reserve, not spending money</span>, so it's shown separately from cash on hand.
+          </p>
+          <AccountList accounts={inv} total={forecast.liquidatable} />
+          <p className="text-[11px] text-muted-foreground">Selling some of these is the usual way to cover a projected cash dip.</p>
+        </div>
+      );
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle className="font-display text-2xl">{title}</SheetTitle>
+          {desc && <SheetDescription>{desc}</SheetDescription>}
+        </SheetHeader>
+        <div className="mt-5">{body}</div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function BreakdownBlock({ title, tone, total, groups, showDates }: { title: string; tone: "success" | "destructive"; total: number; groups: { category: string; amount: number; items: { name: string; amount: number; date?: string; tag?: string }[] }[]; showDates?: boolean }) {
+  const tint = tone === "success" ? "text-success" : "text-destructive";
+  return (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+        <span className={`font-mono-fin text-sm ${tint}`}>{fmtCents(total)}</span>
+      </div>
+      {groups.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nothing here this month.</p>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {groups.map((g) => (
+            <details key={g.category} className="group">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-sm">
+                <span className="flex items-center gap-1.5">
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
+                  {g.category} <span className="text-[10px] text-muted-foreground">· {g.items.length}</span>
+                </span>
+                <span className="font-mono-fin tabular-nums">{fmtCents(g.amount)}</span>
+              </summary>
+              <ul className="border-t border-border bg-background/40 px-3 py-1.5">
+                {g.items.map((it, i) => (
+                  <li key={i} className="flex items-center justify-between gap-3 py-1 text-xs">
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {it.name}
+                      {showDates && it.date ? <span className="ml-1.5 text-[10px] opacity-60">{new Date(it.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span> : null}
+                      {it.tag ? <span className="ml-1.5 rounded bg-secondary px-1 text-[9px] uppercase tracking-wider">{it.tag}</span> : null}
+                    </span>
+                    <span className="font-mono-fin shrink-0 tabular-nums">{fmtCents(it.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccountList({ accounts, total }: { accounts: { name: string; nickname?: string | null; mask: string; balance: number }[]; total: number }) {
+  return (
+    <div className="divide-y divide-border rounded-lg border border-border">
+      {accounts.sort((a, b) => b.balance - a.balance).map((a, i) => (
+        <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+          <span className="min-w-0 truncate">{accountLabel(a as any)} <span className="text-[10px] text-muted-foreground">{a.mask}</span></span>
+          <span className="font-mono-fin shrink-0 tabular-nums">{fmtCents(a.balance)}</span>
+        </div>
+      ))}
+      <div className="flex items-center justify-between px-3 py-2 text-sm font-medium">
+        <span>Total</span><span className="font-mono-fin tabular-nums">{fmtCents(total)}</span>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, tone }: { label: string; value: string; tone: "success" | "destructive" | "neutral" }) {
+  const tint = tone === "success" ? "text-success" : tone === "destructive" ? "text-destructive" : "text-foreground";
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-mono-fin tabular-nums ${tint}`}>{value}</span>
     </div>
   );
 }

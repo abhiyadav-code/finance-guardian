@@ -930,13 +930,15 @@ function IncomeCard({
                 </div>
                 <span className="w-10 text-[10px] text-muted-foreground">{cadenceLabel[s.cadence]}</span>
                 <Switch checked={s.active} onCheckedChange={() => onToggle(s.id)} />
+                <StreamEditButton kind="income" id={s.id} name={s.source} />
               </div>
             </li>
           );
         })}
       </ul>
       <p className="mt-4 text-[11px] text-muted-foreground">
-        Toggle a paycheck off to model job loss · edit amounts to model a raise or unemployment pay.
+        Toggle a paycheck off to model job loss · edit amounts to model a raise or unemployment pay ·
+        tap the pencil to rename &amp; reclassify (sticks across syncs).
       </p>
     </section>
   );
@@ -969,12 +971,81 @@ function OutflowCard({ outflows }: { outflows: OutflowStream[] }) {
                   {o.kind.replace("_", " ")} · {o.category} · next {new Date(o.nextDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                 </p>
               </div>
-              <p className="font-mono-fin text-sm tabular-nums">−{fmt(o.amount)}<span className="ml-1 text-[10px] text-muted-foreground">{cadenceLabel[o.cadence]}</span></p>
+              <div className="flex items-center gap-2">
+                <p className="font-mono-fin text-sm tabular-nums">−{fmt(o.amount)}<span className="ml-1 text-[10px] text-muted-foreground">{cadenceLabel[o.cadence]}</span></p>
+                <StreamEditButton kind="outflow" id={o.id} name={o.name} category={o.category} />
+              </div>
             </li>
           );
         })}
       </ul>
+      <p className="mt-4 text-[11px] text-muted-foreground">
+        Tap the pencil to rename &amp; recategorize a bill (e.g. "BB Tuition Mgmt" → "Ecole Bilingue tuition") — it sticks across syncs.
+      </p>
     </section>
+  );
+}
+
+// Rename + recategorize a recurring income/bill stream, in place. Persists as a
+// rule across Plaid syncs.
+function StreamEditButton({ kind, id, name, category }: { kind: "income" | "outflow"; id: string; name: string; category?: string }) {
+  const categories = useFinanceStore((s) => s.categories);
+  const updateIncomeStream = useFinanceStore((s) => s.updateIncomeStream);
+  const updateOutflowStream = useFinanceStore((s) => s.updateOutflowStream);
+  const [open, setOpen] = useState(false);
+  const [nm, setNm] = useState(name);
+  const [cat, setCat] = useState(category ?? "");
+  const [ik, setIk] = useState("keep");
+  const save = () => {
+    if (kind === "income") updateIncomeStream(id, { source: nm, ...(ik !== "keep" ? { kind: ik as any } : {}) });
+    else updateOutflowStream(id, { name: nm, ...(cat ? { category: cat } : {}) });
+    setOpen(false);
+    toast.success("Updated");
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground" title="Rename / recategorize">
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 p-3">
+        <p className="mb-2 text-[11px] text-muted-foreground">Rename &amp; recategorize — sticks across syncs.</p>
+        <div className="space-y-2.5">
+          <div>
+            <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</label>
+            <Input value={nm} onChange={(e) => setNm(e.target.value)} className="mt-1 h-8 text-sm" autoFocus />
+          </div>
+          {kind === "income" ? (
+            <div>
+              <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Type</label>
+              <Select value={ik} onValueChange={setIk}>
+                <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="keep">— keep current —</SelectItem>
+                  {INCOME_KINDS.map((k) => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</label>
+              <Select value={cat || "none"} onValueChange={(v) => setCat(v === "none" ? "" : v)}>
+                <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Choose" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— keep current —</SelectItem>
+                  {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)} className="text-muted-foreground">Cancel</Button>
+          <Button size="sm" onClick={save} className="bg-primary text-primary-foreground hover:bg-primary/90">Save</Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
